@@ -1,45 +1,73 @@
+import { downloadMediaMessage, getContentType } from '@whiskeysockets/baileys';
+import pino from 'pino';
+
+function unwrap(message) {
+  if (!message) return null;
+  if (message.viewOnceMessage?.message) return message.viewOnceMessage.message;
+  if (message.viewOnceMessageV2?.message) return message.viewOnceMessageV2.message;
+  if (message.viewOnceMessageV2Extension?.message) return message.viewOnceMessageV2Extension.message;
+  if (message.ephemeralMessage?.message) return unwrap(message.ephemeralMessage.message);
+  return null;
+}
+
 export default {
   name: 'vv1',
-  aliases: ['viewonce', 'antivv'],
+  aliases: ['vv', 'vv2', 'viewonce', 'antivv'],
   category: 'TOOLS',
-  description: 'Downloads and resends a replied view-once media message',
+  description: 'Download and resend a replied view-once image/video',
 
-  async run({ reply, quoted, sock, chat, raw }) {
-    if (!quoted) {
-      throw new Error('Usage: Reply to a view-once media message with .vv1');
+  async run({ quoted, sock, chat, raw }) {
+    if (!quoted?.message) {
+      throw new Error('Reply to a view-once image or video with .vv1');
     }
 
-    const viewOnce = quoted.viewOnceMessage || quoted.viewOnceMessageV2;
-
-    if (!viewOnce) {
-      throw new Error('The quoted message is not a view-once file.');
+    const mediaMessage = unwrap(quoted.message);
+    if (!mediaMessage) {
+      throw new Error('The replied message is not a supported view-once message.');
     }
 
-    try {
-      const mediaMessage = viewOnce.message;
-      const mediaType = Object.keys(mediaMessage)[0];
+    const mediaType = getContentType(mediaMessage);
+    if (!['imageMessage', 'videoMessage', 'audioMessage'].includes(mediaType)) {
+      throw new Error('Unsupported view-once media type.');
+    }
 
-      const { downloadMediaMessage } = await import('@whiskeysockets/baileys');
-      const pino = (await import('pino')).default;
-
-      const buffer = await downloadMediaMessage(
-        { message: mediaMessage },
-        'buffer',
-        {},
-        { logger: pino({ level: 'silent' }) }
-      );
-
-      if (mediaType === 'imageMessage') {
-        await sock.sendMessage(chat, { image: buffer, caption: 'Here is the downloaded view-once image.' }, { quoted: raw });
-      } else if (mediaType === 'videoMessage') {
-        await sock.sendMessage(chat, { video: buffer, caption: 'Here is the downloaded view-once video.' }, { quoted: raw });
-      } else {
-        await reply('Unsupported view-once media format.');
+    const buffer = await downloadMediaMessage(
+      {
+        key: {
+          remoteJid: chat,
+          id: quoted.stanzaId,
+          participant: quoted.participant
+        },
+        message: mediaMessage
+      },
+      'buffer',
+      {},
+      {
+        logger: pino({ level: 'silent' }),
+        reuploadRequest: sock.updateMediaMessage
       }
-    } catch (err) {
-      console.error('Download error:', err);
-      throw new Error('Failed to process and download the media.');
+    );
+
+    if (mediaType === 'imageMessage') {
+      await sock.sendMessage(chat, {
+        image: buffer,
+        caption: mediaMessage.imageMessage?.caption || 'Recovered view-once image'
+      }, { quoted: raw });
+      return;
     }
+
+    if (mediaType === 'videoMessage') {
+      await sock.sendMessage(chat, {
+        video: buffer,
+        caption: mediaMessage.videoMessage?.caption || 'Recovered view-once video'
+      }, { quoted: raw });
+      return;
+    }
+
+    await sock.sendMessage(chat, {
+      audio: buffer,
+      mimetype: mediaMessage.audioMessage?.mimetype || 'audio/ogg',
+      ptt: Boolean(mediaMessage.audioMessage?.ptt)
+    }, { quoted: raw });
   }
 };
-
