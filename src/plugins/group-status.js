@@ -8,6 +8,7 @@ import {
 
 const unwrap = message => {
   let current = message;
+
   for (let i = 0; i < 8 && current; i++) {
     const next =
       current.ephemeralMessage?.message ||
@@ -15,9 +16,11 @@ const unwrap = message => {
       current.viewOnceMessageV2?.message ||
       current.viewOnceMessageV2Extension?.message ||
       current.documentWithCaptionMessage?.message;
+
     if (!next) break;
     current = next;
   }
+
   return current || {};
 };
 
@@ -31,7 +34,11 @@ const quotedText = message =>
 async function mediaBuffer(message, type) {
   const stream = await downloadContentFromMessage(message, type);
   const chunks = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+
+  for await (const chunk of stream) {
+    chunks.push(Buffer.from(chunk));
+  }
+
   return Buffer.concat(chunks);
 }
 
@@ -68,35 +75,62 @@ async function payloadFromMessage(message, commandText = '') {
         mimetype: msg.audioMessage.mimetype || 'audio/ogg; codecs=opus',
         ptt: Boolean(msg.audioMessage.ptt)
       },
-      kind: msg.audioMessage.ptt ? 'voice note' : 'audio'
+      kind: 'audio'
     };
   }
 
   const text = commandText || quotedText(msg);
-  if (text) return { payload: { text }, kind: 'text' };
+  if (text) {
+    return {
+      payload: { text },
+      kind: 'text'
+    };
+  }
 
   return null;
 }
 
-function markInnerAsGroupStatus(inner) {
+function statusSourceTypeFor(inner) {
+  if (inner.imageMessage) return 0; // IMAGE
+  if (inner.videoMessage) return inner.videoMessage.gifPlayback ? 2 : 1; // GIF / VIDEO
+  if (inner.audioMessage) return 3; // AUDIO
+  return 4; // TEXT
+}
+
+function markAsGroupStatus(inner, sock) {
   const type = Object.keys(inner || {})[0];
+
   if (!type || !inner[type] || typeof inner[type] !== 'object') {
-    throw new Error('Could not build WhatsApp group-status content.');
+    throw new Error('Could not build WhatsApp Group Status content.');
   }
+
+  const authorJid = jidNormalizedUser(sock.user?.id || '');
+  const sourceType = statusSourceTypeFor(inner);
 
   inner[type].contextInfo = {
     ...(inner[type].contextInfo || {}),
-    isGroupStatus: true
+    isGroupStatus: true,
+    statusSourceType: sourceType,
+    statusAttributions: [
+      {
+        type: 5, // GROUP_STATUS in current WAProto
+        groupStatus: authorJid ? { authorJid } : undefined
+      }
+    ],
+    statusAudienceMetadata: {
+      audienceType: 1 // CLOSE_FRIENDS-style status audience metadata used by current clients
+    }
   };
 
   return inner;
 }
 
 async function sendGroupStatus(sock, groupJid, payload) {
-  const inner = markInnerAsGroupStatus(
+  const inner = markAsGroupStatus(
     await generateWAMessageContent(payload, {
       upload: sock.waUploadToServer
-    })
+    }),
+    sock
   );
 
   const messageSecret = crypto.randomBytes(32);
@@ -116,10 +150,19 @@ async function sendGroupStatus(sock, groupJid, payload) {
 
   await sock.relayMessage(groupJid, generated.message, {
     messageId: generated.key.id,
+
+    // Group Status is transported as a status-like text stanza even when the
+    // inner message contains image/video media.
+    additionalAttributes: {
+      type: 'text'
+    },
+
     additionalNodes: [
       {
         tag: 'meta',
-        attrs: { is_group_status: 'true' }
+        attrs: {
+          is_group_status: 'true'
+        }
       }
     ]
   });
@@ -132,10 +175,11 @@ export default {
   aliases: ['gcs', 'gcstory', 'groupstatus'],
   category: 'GROUP STATUS',
   groupOnly: true,
-  description: 'Post text or replied image/video/audio as a real WhatsApp Group Status Update.',
+  description: 'Post text, image, video or audio as a real WhatsApp Group Status Update.',
 
   async run({ text, quoted, raw, sock, chat, reply }) {
     const sourceMessage = quoted?.message || raw?.message || {};
+
     const prepared = await payloadFromMessage(
       sourceMessage,
       String(text || '').trim()
@@ -150,8 +194,8 @@ export default {
     await sendGroupStatus(sock, chat, prepared.payload);
 
     await reply(
-      `✅ ${prepared.kind} group Status Update sent.\n` +
-      `Check the group Status section in WhatsApp.`
+      `✅ ${prepared.kind} Group Status Update sent.\n` +
+      `Check the group's Status Updates section.`
     );
   }
 };
