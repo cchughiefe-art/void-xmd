@@ -28,6 +28,23 @@ let activeSocket;
 let latestPairingCode = '';
 let pairingPromise = null;
 
+const groupMetadataCache = new Map();
+const GROUP_METADATA_TTL = 60_000;
+
+async function getGroupMetadataCached(sock, jid, force = false) {
+  const now = Date.now();
+  const cached = groupMetadataCache.get(jid);
+
+  if (!force && cached && now - cached.at < GROUP_METADATA_TTL) {
+    return cached.value;
+  }
+
+  const value = await sock.groupMetadata(jid);
+  groupMetadataCache.set(jid, { at: now, value });
+  return value;
+}
+
+
 const bodyOf = message => {
   const m = message?.message;
   if (!m) return '';
@@ -158,8 +175,9 @@ export async function startBot() {
   });
 
   sock.ev.on('group-participants.update', async event => {
+    groupMetadataCache.delete(event.id);
     const settings = store.getGroup(event.id);
-    const meta = await sock.groupMetadata(event.id).catch(() => null);
+    const meta = await getGroupMetadataCached(sock, event.id, true).catch(() => null);
     if (!meta) return;
 
     for (const member of event.participants) {
@@ -207,7 +225,7 @@ export async function startBot() {
         let isBotAdmin = false;
 
         if (isGroup) {
-          metadata = await sock.groupMetadata(chat);
+          metadata = await getGroupMetadataCached(sock, chat);
           const admins = metadata.participants.filter(p => p.admin).map(p => jidNumber(p.id));
           isAdmin = admins.includes(jidNumber(sender));
           isBotAdmin = admins.includes(jidNumber(sock.user?.id));

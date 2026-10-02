@@ -199,21 +199,21 @@ export async function handleMessageAutomation(ctx) {
   const settings = store.getGroup(chat);
 
   if (settings.autoread) {
-    await sock.readMessages([raw.key]).catch(() => {});
+    void sock.readMessages([raw.key]).catch(() => {});
   }
 
   if (settings.alwaysonline) {
-    await sock.sendPresenceUpdate('available', chat).catch(() => {});
+    void sock.sendPresenceUpdate('available', chat).catch(() => {});
   }
 
   if (settings.autotyping) {
-    await sock.sendPresenceUpdate('composing', chat).catch(() => {});
+    void sock.sendPresenceUpdate('composing', chat).catch(() => {});
   } else if (settings.autorecording) {
-    await sock.sendPresenceUpdate('recording', chat).catch(() => {});
+    void sock.sendPresenceUpdate('recording', chat).catch(() => {});
   }
 
   if (settings.autoreact && !raw.key.fromMe) {
-    await sock.sendMessage(chat, {
+    void sock.sendMessage(chat, {
       react: { text: '👍', key: raw.key }
     }).catch(() => {});
   }

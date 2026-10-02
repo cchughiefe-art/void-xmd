@@ -12,6 +12,8 @@ const defaults = {
 
 const dbFile = path.join(config.dataDir, 'void-xmd.json');
 let state = structuredClone(defaults);
+let delayedSaveTimer = null;
+let dirty = false;
 
 const groupDefaults = () => ({
   welcome: false,
@@ -28,6 +30,8 @@ const groupDefaults = () => ({
   antimention: false,
   antitag: false,
   antitemu: false,
+  antidelete: false,
+  antiviewonce: false,
   autotyping: false,
   autoviewstatus: false,
   autostatusreact: false,
@@ -59,12 +63,43 @@ export function loadStore() {
   }
 }
 
-function save() {
+function saveNow() {
+  if (delayedSaveTimer) {
+    clearTimeout(delayedSaveTimer);
+    delayedSaveTimer = null;
+  }
+  dirty = false;
+
   fs.mkdirSync(config.dataDir, { recursive: true });
   const tmp = `${dbFile}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+
+  // Compact JSON is much faster to serialize/write than pretty-printed JSON
+  // and uses less of Heaven's disk I/O.
+  fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
   fs.renameSync(tmp, dbFile);
   try { fs.chmodSync(dbFile, 0o600); } catch {}
+}
+
+function scheduleSave(delay = 4000) {
+  dirty = true;
+  if (delayedSaveTimer) return;
+
+  delayedSaveTimer = setTimeout(() => {
+    delayedSaveTimer = null;
+    if (dirty) {
+      try {
+        saveNow();
+      } catch (error) {
+        console.error('Delayed database save:', error.message);
+      }
+    }
+  }, delay);
+
+  delayedSaveTimer.unref?.();
+}
+
+export function flushStore() {
+  if (dirty) saveNow();
 }
 
 export const store = {
@@ -76,7 +111,7 @@ export const store = {
 
   updateGroup(jid, patch) {
     Object.assign(this.getGroup(jid), patch);
-    save();
+    saveNow();
     return this.getGroup(jid);
   },
 
@@ -86,7 +121,7 @@ export const store = {
 
   setGlobal(key, value) {
     state.global[key] = value;
-    save();
+    saveNow();
     return value;
   },
 
@@ -96,13 +131,13 @@ export const store = {
 
   setApiKey(name, value) {
     state.secrets.apiKeys[String(name).toLowerCase()] = String(value);
-    save();
+    saveNow();
   },
 
   removeApiKey(name) {
     delete state.secrets.apiKeys[String(name).toLowerCase()];
     if (state.secrets.currentKey === String(name).toLowerCase()) state.secrets.currentKey = '';
-    save();
+    saveNow();
   },
 
   listApiKeys() {
@@ -113,7 +148,7 @@ export const store = {
     const key = String(name).toLowerCase();
     if (!state.secrets.apiKeys[key]) throw new Error(`No API key named "${key}" is stored.`);
     state.secrets.currentKey = key;
-    save();
+    saveNow();
     return key;
   },
 
@@ -128,7 +163,7 @@ export const store = {
 
   addCoins(jid, amount) {
     state.economy[jid] = this.balance(jid) + amount;
-    save();
+    saveNow();
     return state.economy[jid];
   },
 
@@ -145,8 +180,25 @@ export const store = {
     };
   },
 
+  // This runs for every incoming message. Do NOT synchronously rewrite the
+  // entire JSON database on the command hot path.
   see(jid) {
-    state.users[jid] = Date.now();
-    save();
+    const now = Date.now();
+    const previous = state.users[jid] || 0;
+    state.users[jid] = now;
+
+    // Persist presence/last-seen data in batches. Important settings/keys still
+    // use saveNow() immediately.
+    if (now - previous > 15000) scheduleSave();
   }
 };
+
+process.once('beforeExit', () => {
+  try { flushStore(); } catch {}
+});
+process.once('SIGTERM', () => {
+  try { flushStore(); } catch {}
+});
+process.once('SIGINT', () => {
+  try { flushStore(); } catch {}
+});
