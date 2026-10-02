@@ -297,8 +297,14 @@ const pluginUsage = {
   listpanels: '.listpanels',
   panelinfo: '.panelinfo <server ID>',
   deletepanel: '.deletepanel <server ID> CONFIRM',
-  restartpanel: '.restartpanel <client server ID>',
-  panelstats: '.panelstats <client server ID>'
+  panelservers: '.panelservers',
+  setserverid: '.setserverid <client server identifier>',
+  getserverid: '.getserverid',
+  testpanel: '.testpanel',
+  restartpanel: '.restartpanel <client server identifier>',
+  restartserver: '.restartserver',
+  serverstatus: '.serverstatus',
+  panelstats: '.panelstats <client server identifier>'
 };
 
 const requirements = {

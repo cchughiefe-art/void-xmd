@@ -759,18 +759,128 @@ const panelCommands = [
     }
   },
   {
-    name: 'restartpanel', category: 'PANEL', ownerOnly: true, description: 'Restart a Pterodactyl server by client identifier',
+    name: 'panelservers',
+    aliases: ['clientservers'],
+    category: 'PANEL',
+    ownerOnly: true,
+    description: 'List servers accessible with the configured Pterodactyl client API key',
+    async run({ reply }) {
+      const data = await panelClient('');
+      const rows = (data.data || []).map(item => {
+        const a = item.attributes || {};
+        const id = a.identifier || a.uuid || a.internal_id || '-';
+        return `${id} • ${a.name || 'Unnamed server'}${a.node ? ` • ${a.node}` : ''}`;
+      });
+      await reply(rows.length ? `*Client API servers*\n${rows.join('\n')}` : 'No servers are visible to this client API key.');
+    }
+  },
+  {
+    name: 'setserverid',
+    category: 'PANEL',
+    ownerOnly: true,
+    description: 'Save the client server identifier used by restartserver/serverstatus',
+    async run({ text, reply }) {
+      const id = need(text, 'Usage: .setserverid SERVER_IDENTIFIER').trim();
+      if (!/^[A-Za-z0-9_-]{4,128}$/.test(id)) throw new Error('That server identifier format looks invalid.');
+      store.setGlobal('panelServerId', id);
+      await reply(`Default server identifier saved: ${id}`);
+    }
+  },
+  {
+    name: 'getserverid',
+    category: 'PANEL',
+    ownerOnly: true,
+    description: 'Show the saved client server identifier',
+    run({ reply }) {
+      const id = store.getGlobal('panelServerId', process.env.PANEL_SERVER_ID || '');
+      return reply(id ? `Default server identifier: ${id}` : 'No server identifier saved. Run .panelservers then .setserverid IDENTIFIER');
+    }
+  },
+  {
+    name: 'testpanel',
+    category: 'PANEL',
+    ownerOnly: true,
+    description: 'Verify the panel client API key and saved server identifier',
+    async run({ reply }) {
+      const id = store.getGlobal('panelServerId', process.env.PANEL_SERVER_ID || '');
+      if (!id) {
+        const data = await panelClient('');
+        const rows = (data.data || []).map(item => {
+          const a = item.attributes || {};
+          return `${a.identifier || a.uuid || '-'} • ${a.name || 'Unnamed server'}`;
+        });
+        return reply(rows.length
+          ? `Client API key works. Save one server with:\n.setserverid IDENTIFIER\n\n${rows.join('\n')}`
+          : 'Client API key works, but no servers are visible.');
+      }
+
+      const data = await panelClient(`/servers/${encodeURIComponent(id)}/resources`);
+      const a = data.attributes || {};
+      await reply(`Panel API works.\nServer: ${id}\nState: ${a.current_state || '-'}\nSuspended: ${a.is_suspended ? 'YES' : 'NO'}`);
+    }
+  },
+  {
+    name: 'restartpanel',
+    category: 'PANEL',
+    ownerOnly: true,
+    description: 'Restart a Pterodactyl server by client identifier',
     async run({ text, reply }) {
       const id = need(text, 'Usage: .restartpanel SERVER_IDENTIFIER');
+      await reply(`Sending restart request for ${id}…`);
       await panelClient(`/servers/${encodeURIComponent(id)}/power`, {
         method: 'POST',
         body: JSON.stringify({ signal: 'restart' })
       });
-      await reply(`Restart signal sent to ${id}.`);
     }
   },
   {
-    name: 'panelstats', category: 'PANEL', ownerOnly: true, description: 'Show live Pterodactyl server resource usage',
+    name: 'restartserver',
+    aliases: ['rebootserver'],
+    category: 'PANEL',
+    ownerOnly: true,
+    description: 'Restart the saved VOID XMD server through the Pterodactyl client API',
+    async run({ reply }) {
+      const id = store.getGlobal('panelServerId', process.env.PANEL_SERVER_ID || '');
+      if (!id) throw new Error('No server identifier saved. Run .panelservers then .setserverid IDENTIFIER');
+
+      // Reply before restarting because the bot may disconnect immediately.
+      await reply(`Restarting server ${id}… VOID XMD may go offline briefly.`);
+
+      await panelClient(`/servers/${encodeURIComponent(id)}/power`, {
+        method: 'POST',
+        body: JSON.stringify({ signal: 'restart' })
+      });
+    }
+  },
+  {
+    name: 'serverstatus',
+    aliases: ['serverstats'],
+    category: 'PANEL',
+    ownerOnly: true,
+    description: 'Show live state and resource usage for the saved VOID XMD server',
+    async run({ reply }) {
+      const id = store.getGlobal('panelServerId', process.env.PANEL_SERVER_ID || '');
+      if (!id) throw new Error('No server identifier saved. Run .panelservers then .setserverid IDENTIFIER');
+
+      const data = await panelClient(`/servers/${encodeURIComponent(id)}/resources`);
+      const a = data.attributes || {};
+      const r = a.resources || {};
+
+      await reply(
+        `*Server ${id}*\n` +
+        `State: ${a.current_state || '-'}\n` +
+        `CPU: ${r.cpu_absolute ?? '-'}%\n` +
+        `Memory: ${Math.round((r.memory_bytes || 0) / 1048576)} MB\n` +
+        `Disk: ${Math.round((r.disk_bytes || 0) / 1048576)} MB\n` +
+        `Network RX/TX: ${r.network_rx_bytes || 0}/${r.network_tx_bytes || 0}`
+      );
+    }
+  },
+  {
+    name: 'panelstats',
+    category: 'PANEL',
+    ownerOnly: true,
+    description: 'Show live Pterodactyl server resource usage by explicit client identifier',
     async run({ text, reply }) {
       const id = need(text, 'Usage: .panelstats SERVER_IDENTIFIER');
       const data = await panelClient(`/servers/${encodeURIComponent(id)}/resources`);
