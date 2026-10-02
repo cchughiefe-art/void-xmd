@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { config } from './config.js';
 import { loadPlugins } from './plugin-loader.js';
 import { run } from './utils.js';
+import { askAi } from './ai-provider.js';
 
 const draftsDir=path.join(config.dataDir,'feature-drafts');
 const pluginsDir=path.join(config.dataDir,'plugins');
@@ -20,12 +21,10 @@ function validateCode(code){
 }
 
 export async function createFeatureDraft(description){
-  if(!config.aiKey) throw new Error('Configure AI_API_KEY before using the feature builder.');
   if(String(description).trim().length<8) throw new Error('Describe the feature in more detail.');
   const prompt=`Create one safe VOID XMD WhatsApp command plugin from this request: ${description}\nReturn JavaScript only, no markdown. Export default exactly one object with name, aliases, category, description, ownerOnly, groupOnly, adminOnly, and async run(ctx). Use only values already in ctx: reply, args, text, pushName, sender, chat, metadata, config. Do not import anything, access files, environment variables, processes, shells, credentials, network URLs, eval, constructors, or global objects. Keep it below 150 lines. If the request needs forbidden access, create a command that explains the limitation instead.`;
-  const response=await fetch(`${config.aiBaseUrl}/chat/completions`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${config.aiKey}`},body:JSON.stringify({model:config.aiModel,messages:[{role:'system',content:'You write small, defensive JavaScript command plugins.'},{role:'user',content:prompt}],temperature:0.2}),signal:AbortSignal.timeout(60000)});
-  if(!response.ok) throw new Error(`AI provider returned ${response.status}`);
-  const data=await response.json(); const code=extractCode(data.choices?.[0]?.message?.content); validateCode(code);
+  const content=await askAi(prompt,{system:'You write small, defensive JavaScript command plugins.',temperature:0.2,maxTokens:3500,timeout:60000});
+  const code=extractCode(content); validateCode(code);
   const id=crypto.randomBytes(5).toString('hex'); ensureDirs();
   const draft={id,description:String(description).trim(),code,status:'pending',createdAt:new Date().toISOString()};
   fs.writeFileSync(path.join(draftsDir,`${id}.json`),JSON.stringify(draft,null,2)); return draft;

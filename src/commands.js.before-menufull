@@ -2,17 +2,20 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { config } from './config.js';
 import { renderMenu } from './menu.js';
-import { renderFullMenu } from './full-menu.js';
 import { store } from './store.js';
 import { fetchJson, formatRuntime, jidNumber, run } from './utils.js';
 import { executePlugin } from './plugin-loader.js';
-import { askAi, getAiSettings } from './ai-provider.js';
 
 const onOff = value => ['on','true','1','enable'].includes(String(value).toLowerCase());
 const pick = items => items[Math.floor(Math.random() * items.length)];
 
 async function ai(prompt) {
-  return askAi(prompt, { temperature: 0.7, maxTokens: 1200 });
+  if (!config.aiKey) throw new Error('AI_API_KEY has not been configured.');
+  const data = await fetchJson(`${config.aiBaseUrl}/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${config.aiKey}` },
+    body: JSON.stringify({ model: config.aiModel, messages: [{ role: 'user', content: prompt }], temperature: 0.7 })
+  }, 45000);
+  return data.choices?.[0]?.message?.content || 'The AI provider returned no answer.';
 }
 
 export async function execute(ctx) {
@@ -25,10 +28,6 @@ export async function execute(ctx) {
   if (await executePlugin({ ...ctx, config })) return;
 
   if (['menu','help','commands'].includes(command)) return reply(renderMenu(ctx.pushName));
-  if (['menufull','fullmenu','helpfull'].includes(command)) {
-    for (const page of renderFullMenu(ctx.pushName)) await reply(page);
-    return;
-  }
   if (command === 'ping') return reply(`🏓 Pong: ${Date.now() - ctx.timestamp}ms`);
   if (command === 'runtime') return reply(`⏱️ ${formatRuntime(process.uptime())}`);
   if (command === 'botinfo') return reply(`*${config.name}*\nMode: ${config.mode}\nNode: ${process.version}\nPlatform: ${os.platform()} ${os.arch()}\nUptime: ${formatRuntime(process.uptime())}`);
@@ -42,10 +41,7 @@ export async function execute(ctx) {
   if (command === 'explain') return reply(await ai(`Explain simply:\n${need(text)}`));
   if (command === 'rewrite') return reply(await ai(`Rewrite clearly and naturally:\n${need(text)}`));
   if (command === 'summarize') return reply(await ai(`Summarize concisely:\n${need(text)}`));
-  if (command === 'aistatus') {
-    const current = getAiSettings({ required: false });
-    return reply(current.key ? `AI ready: ${current.model}\nSource: ${current.source}` : 'AI is disabled. Owner: use .addapikey gemini YOUR_KEY in a private chat.');
-  }
+  if (command === 'aistatus') return reply(config.aiKey ? `AI ready: ${config.aiModel}` : 'AI is disabled. Add AI_API_KEY.');
 
   if (command === 'weather') {
     const place = encodeURIComponent(need(text));

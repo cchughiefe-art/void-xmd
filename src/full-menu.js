@@ -302,14 +302,14 @@ const pluginUsage = {
 };
 
 const requirements = {
-  ai: 'AI_API_KEY',
-  gpt: 'AI_API_KEY',
-  explain: 'AI_API_KEY',
-  rewrite: 'AI_API_KEY',
-  summarize: 'AI_API_KEY',
-  translate: 'AI_API_KEY',
-  define: 'AI_API_KEY',
-  feature: 'AI_API_KEY',
+  ai: 'Gemini key via .addapikey gemini KEY (AI_API_KEY environment fallback is also supported)',
+  gpt: 'Gemini key via .addapikey gemini KEY (AI_API_KEY environment fallback is also supported)',
+  explain: 'Gemini key via .addapikey gemini KEY (AI_API_KEY environment fallback is also supported)',
+  rewrite: 'Gemini key via .addapikey gemini KEY (AI_API_KEY environment fallback is also supported)',
+  summarize: 'Gemini key via .addapikey gemini KEY (AI_API_KEY environment fallback is also supported)',
+  translate: 'Gemini key via .addapikey gemini KEY (AI_API_KEY environment fallback is also supported)',
+  define: 'Gemini key via .addapikey gemini KEY (AI_API_KEY environment fallback is also supported)',
+  feature: 'Gemini key via .addapikey gemini KEY (AI_API_KEY environment fallback is also supported)',
   shazam: 'AudD API key: .addapikey audd KEY',
   xbox: 'OpenXBL key: .addapikey xbox KEY',
   steam: 'Steam Web API key: .addapikey steam KEY',

@@ -5,6 +5,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { store } from '../store.js';
 import { jidNumber } from '../utils.js';
+import { askAi } from '../ai-provider.js';
 
 const ua = 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36 VOID-XMD/1.0';
 const need = (value, usage) => {
@@ -134,21 +135,11 @@ function fakeIdentity() {
 }
 
 async function aiText(prompt) {
-  const key = process.env.AI_API_KEY || '';
-  const base = (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
-  const model = process.env.AI_MODEL || 'gpt-4.1-mini';
-  if (!key) throw new Error('AI_API_KEY is required for this command.');
-  const data = await json(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-      max_tokens: 400
-    })
-  }, 45000);
-  return data.choices?.[0]?.message?.content?.trim() || 'No result.';
+  return askAi(prompt, {
+    temperature: 0.2,
+    maxTokens: 400,
+    timeout: 45000
+  });
 }
 
 async function football(pathname) {
@@ -627,13 +618,21 @@ const panelCommands = [
     run: ({ reply }) => reply(store.getGlobal('panelDomain', process.env.PANEL_URL || 'No panel domain configured.'))
   },
   {
-    name: 'addapikey', category: 'SETTINGS', ownerOnly: true, description: 'Store a named API key securely in the persistent bot data',
-    async run({ args, text, reply }) {
+    name: 'addapikey', category: 'SETTINGS', ownerOnly: true, description: 'Store a named API key in persistent bot data and try to delete the WhatsApp message containing the secret',
+    async run({ args, text, sock, chat, raw }) {
       const name = String(args[0] || '').toLowerCase();
       const value = text.slice((args[0] || '').length).trim();
       if (!name || !value) throw new Error('Usage: .addapikey name secret-value');
+
       store.setApiKey(name, value);
-      await reply(`API key "${name}" stored. Its value will not be echoed.`);
+
+      // Best effort: remove the command containing the secret from WhatsApp.
+      // This succeeds most reliably when the command was sent by the linked bot account.
+      await sock.sendMessage(chat, { delete: raw.key }).catch(() => {});
+
+      await sock.sendMessage(chat, {
+        text: `API key "${name}" stored. The secret value will not be displayed.`
+      }).catch(() => {});
     }
   },
   {

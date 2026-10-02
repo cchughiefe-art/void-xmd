@@ -1,32 +1,18 @@
 import { config } from './config.js';
 import { store } from './store.js';
 import { jidNumber } from './utils.js';
+import { askAi } from './ai-provider.js';
 
 const NSFW_WORDS = /\b(?:porn|porno|xxx|nudes?|sex\s*video|hentai|onlyfans)\b/i;
 const TEMU_LINK = /(?:https?:\/\/)?(?:www\.)?temu\.com\//i;
 
 async function aiReply(text) {
-  if (!config.aiKey) throw new Error('AI_API_KEY is required for chatbot mode.');
-  const response = await fetch(`${config.aiBaseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${config.aiKey}`
-    },
-    body: JSON.stringify({
-      model: config.aiModel,
-      messages: [
-        { role: 'system', content: 'You are the concise WhatsApp group assistant for VOID XMD. Be helpful and brief.' },
-        { role: 'user', content: text }
-      ],
-      temperature: 0.6,
-      max_tokens: 300
-    }),
-    signal: AbortSignal.timeout(30000)
+  return askAi(text, {
+    system: 'You are the concise WhatsApp group assistant for VOID XMD. Be helpful and brief.',
+    temperature: 0.6,
+    maxTokens: 300,
+    timeout: 30000
   });
-  if (!response.ok) throw new Error(`AI provider returned ${response.status}`);
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content?.trim() || '';
 }
 
 async function removeMessage(sock, chat, raw, notice) {

@@ -6,13 +6,18 @@
   "description": "Raven-ready WhatsApp multi-device bot",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "mkdir -p data; if [ -f data/VOID-XMD-UPDATE.tar.gz ]; then echo 'Applying VOID XMD update...'; tar -xzf data/VOID-XMD-UPDATE.tar.gz -C . && rm -f data/VOID-XMD-UPDATE.tar.gz && echo 'VOID XMD update applied.'; fi; if [ -f data/VOID-XMD-AUTH.tar.gz ]; then echo 'Restoring WhatsApp session...'; rm -rf data/auth && tar -xzf data/VOID-XMD-AUTH.tar.gz -C data && rm -f data/VOID-XMD-AUTH.tar.gz && echo 'Session restored.'; fi; node src/index.js",
     "check": "node --check src/*.js && node --check src/plugins/*.js"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "pino": "^9.7.0"
+  },
+  "allowScripts": {
+    "@whiskeysockets/baileys@7.0.0-rc14": true
   }
 }
