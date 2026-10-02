@@ -210,6 +210,7 @@ const pluginUsage = {
   leavegc: '.leavegc',
   join: '.join <WhatsApp invite link/code>',
   gcstatus: '.gcstatus',
+  setgcs: '.setgcs <text>, or reply to image/video/audio with .setgcs [caption]',
   getname: '.getname',
   getdeskgc: '.getdeskgc',
   getppgc: '.getppgc',
