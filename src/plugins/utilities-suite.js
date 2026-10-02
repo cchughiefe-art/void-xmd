@@ -98,6 +98,52 @@ async function publicProfile(url) {
   };
 }
 
+let rdapBootstrap;
+
+async function rdapDomain(domain) {
+  const clean = String(domain || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .split('/')[0]
+    .replace(/\.$/, '');
+
+  const labels = clean.split('.').filter(Boolean);
+  if (labels.length < 2) throw new Error('Usage: .whois example.com');
+
+  const tld = labels.at(-1);
+
+  rdapBootstrap ||= await json(
+    'https://data.iana.org/rdap/dns.json',
+    { headers: { accept: 'application/json' } },
+    20000
+  );
+
+  const service = (rdapBootstrap.services || []).find(entry =>
+    Array.isArray(entry?.[0]) &&
+    entry[0].some(value => String(value).toLowerCase() === tld)
+  );
+
+  const bases = service?.[1] || [];
+  if (!bases.length) throw new Error(`No RDAP service is registered for .${tld}`);
+
+  let lastError;
+  for (const base of bases) {
+    try {
+      const endpoint = `${String(base).replace(/\/?$/, '/')}` + `domain/${encodeURIComponent(clean)}`;
+      return await json(
+        endpoint,
+        { headers: { accept: 'application/rdap+json, application/json' } },
+        20000
+      );
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(`RDAP lookup failed: ${lastError?.message || 'registry unavailable'}`);
+}
+
 function boldText(input) {
   return [...String(input)].map(ch => {
     const cp = ch.codePointAt(0);
@@ -1126,9 +1172,9 @@ export default [
     description: 'Fetch RDAP domain registration data',
     async run({ text, reply }) {
       const domain = need(text, 'Usage: .whois example.com').replace(/^https?:\/\//, '').split('/')[0];
-      const x = await json(`https://rdap.org/domain/${encodeURIComponent(domain)}`);
+      const x = await rdapDomain(domain);
       const events = (x.events || []).map(e => `${e.eventAction}: ${e.eventDate}`).join('\n');
-      await reply(`Domain: ${x.ldhName || domain}\nStatus: ${(x.status || []).join(', ')}\n${events}\nNameservers: ${(x.nameservers || []).map(n => n.ldhName).join(', ')}`);
+      await reply(`Domain: ${x.ldhName || x.unicodeName || domain}\nStatus: ${(x.status || []).join(', ') || '-'}\n${events || 'No registration events returned.'}\nNameservers: ${(x.nameservers || []).map(n => n.ldhName || n.unicodeName).filter(Boolean).join(', ') || '-'}`);
     }
   },
   {

@@ -114,9 +114,16 @@ async function networkTests() {
   }));
 
   rows.push(await timed('RDAP/WHOIS', async () => {
-    const r = await fetchOk('https://rdap.org/domain/example.com');
+    const bootstrapResponse = await fetchOk('https://data.iana.org/rdap/dns.json');
+    const bootstrap = await bootstrapResponse.json();
+    const service = (bootstrap.services || []).find(entry => entry?.[0]?.includes('com'));
+    const base = service?.[1]?.[0];
+    if (!base) throw new Error('No .com RDAP service found in IANA bootstrap.');
+    const r = await fetchOk(`${String(base).replace(/\/?$/, '/')}domain/example.com`, {
+      headers: { accept: 'application/rdap+json, application/json' }
+    });
     const x = await r.json();
-    return x.ldhName || 'reachable';
+    return x.ldhName || x.unicodeName || 'reachable';
   }));
 
   const ai = getAiSettings({ required: false });
