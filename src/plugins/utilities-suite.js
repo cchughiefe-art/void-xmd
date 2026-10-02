@@ -486,7 +486,7 @@ const githubCommands = [
       const files = [];
       const walk = dir => {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          if (['node_modules', '.git', 'data', 'downloads'].includes(entry.name)) continue;
+          if (['node_modules', '.git', 'data', 'downloads'].includes(entry.name) || entry.name.endsWith('.backup') || entry.name.includes('.before-')) continue;
           const full = path.join(dir, entry.name);
           const rel = path.relative(root, full).replace(/\\/g, '/');
           if (entry.isDirectory()) {
@@ -648,13 +648,6 @@ const panelCommands = [
     run: ({ reply }) => {
       const keys = store.listApiKeys();
       return reply(keys.length ? keys.join('\n') : 'No API keys stored.');
-    }
-  },
-  {
-    name: 'setcurrentkey', category: 'SETTINGS', ownerOnly: true, description: 'Select the current named API key',
-    async run({ text, reply }) {
-      const name = store.setCurrentKey(need(text, 'Usage: .setcurrentkey name'));
-      await reply(`Current API key: ${name}`);
     }
   },
   ...Array.from({ length: 10 }, (_, i) => {
@@ -970,7 +963,10 @@ export default [
     description: 'Look up a Minecraft Java username',
     async run({ text, reply }) {
       const name = need(text, 'Usage: .minecraft username');
-      const x = await json(`https://api.mojang.com/users/profiles/minecraft/${encodeURIComponent(name)}`);
+      const response = await request(`https://api.mojang.com/users/profiles/minecraft/${encodeURIComponent(name)}`);
+      if (response.status === 204) throw new Error('Minecraft user not found.');
+      const x = await response.json();
+      if (!x?.id) throw new Error('Minecraft user not found.');
       await reply(`Minecraft: ${x.name}\nUUID: ${x.id}`);
     }
   },
@@ -1064,6 +1060,7 @@ export default [
   {
     name: 'netinfo',
     category: 'NETWORK',
+    ownerOnly: true,
     description: 'Show the bot server network interfaces and public IP',
     async run({ reply }) {
       const interfaces = Object.entries(os.networkInterfaces()).flatMap(([name, rows]) => (rows || []).filter(x => !x.internal).map(x => `${name}: ${x.address} (${x.family})`));

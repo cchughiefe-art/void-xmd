@@ -58,6 +58,10 @@ function unwrapViewOnce(message) {
     break;
   }
 
+  if (!found) {
+    const direct = current?.imageMessage || current?.videoMessage || current?.audioMessage;
+    if (direct?.viewOnce) found = true;
+  }
   return found ? current : null;
 }
 
@@ -208,8 +212,12 @@ export async function handleMessageAutomation(ctx) {
 
   if (settings.autotyping) {
     void sock.sendPresenceUpdate('composing', chat).catch(() => {});
+    const timer = setTimeout(() => void sock.sendPresenceUpdate('paused', chat).catch(() => {}), 2500);
+    timer.unref?.();
   } else if (settings.autorecording) {
     void sock.sendPresenceUpdate('recording', chat).catch(() => {});
+    const timer = setTimeout(() => void sock.sendPresenceUpdate('paused', chat).catch(() => {}), 2500);
+    timer.unref?.();
   }
 
   if (settings.autoreact && !raw.key.fromMe) {
@@ -234,7 +242,7 @@ export async function handleMessageAutomation(ctx) {
 
   const linkMatch = /chat\.whatsapp\.com\/[A-Za-z0-9]+/i.test(normalized);
   if (linkMatch && isBotAdmin) {
-    const mode = settings.antiLinkMode || (settings.antilink ? 'delete' : 'off');
+    const mode = settings.antiLinkMode && settings.antiLinkMode !== 'off' ? settings.antiLinkMode : (settings.antilink ? 'delete' : 'off');
     if (mode !== 'off') {
       if (mode === 'warn') {
         const g = store.getGroup(chat);

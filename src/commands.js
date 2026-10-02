@@ -8,7 +8,13 @@ import { fetchJson, formatRuntime, jidNumber, run } from './utils.js';
 import { executePlugin } from './plugin-loader.js';
 import { askAi, getAiSettings } from './ai-provider.js';
 
-const onOff = value => ['on','true','1','enable'].includes(String(value).toLowerCase());
+const onOff = value => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['on','true','1','enable','enabled'].includes(normalized)) return true;
+  if (['off','false','0','disable','disabled'].includes(normalized)) return false;
+  throw new Error('Use on or off.');
+};
+const effectiveMode = () => store.getGlobal('mode', config.mode);
 const pick = items => items[Math.floor(Math.random() * items.length)];
 
 async function ai(prompt) {
@@ -31,10 +37,14 @@ export async function execute(ctx) {
   }
   if (command === 'ping') return reply(`🏓 Pong: ${Date.now() - ctx.timestamp}ms`);
   if (command === 'runtime') return reply(`⏱️ ${formatRuntime(process.uptime())}`);
-  if (command === 'botinfo') return reply(`*${config.name}*\nMode: ${config.mode}\nNode: ${process.version}\nPlatform: ${os.platform()} ${os.arch()}\nUptime: ${formatRuntime(process.uptime())}`);
+  if (command === 'botinfo') return reply(`*${config.name}*\nMode: ${effectiveMode()}\nNode: ${process.version}\nPlatform: ${os.platform()} ${os.arch()}\nUptime: ${formatRuntime(process.uptime())}`);
   if (command === 'owner') return reply(`Owner: wa.me/${config.owner}`);
-  if (command === 'repo') return reply('VOID XMD private deployment build.');
-  if (['public','private'].includes(command)) { if (!isOwner) throw new Error('Owner only.'); return reply(`Set MODE=${command} in Raven and restart to keep this change.`); }
+  if (command === 'repo') return reply('VOID XMD\nhttps://github.com/cchughiefe-art/void-xmd');
+  if (['public','private'].includes(command)) {
+    if (!isOwner) throw new Error('Owner only.');
+    store.setGlobal('mode', command);
+    return reply(`Bot mode switched to ${command.toUpperCase()} immediately and saved persistently.`);
+  }
   if (command === 'health') return reply('💚 Bot process and WhatsApp connection are active.');
   if (command === 'stats') { const s = store.stats(); return reply(`Users: ${s.users}\nGroups: ${s.groups}\nMemory: ${Math.round(process.memoryUsage().rss/1048576)} MB`); }
 
@@ -85,7 +95,11 @@ export async function execute(ctx) {
   if (command === 'jsonpretty') return reply('```'+JSON.stringify(JSON.parse(need(text)), null, 2)+'```');
   if (command === 'calc') { if (!/^[\d\s()+\-*/%.]+$/.test(text)) throw new Error('Only arithmetic expressions are allowed.'); return reply(String(Function(`"use strict"; return (${text})`)())); }
   if (command === 'qr') return sock.sendMessage(chat, { image: { url: `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(need(text))}` }, caption: 'QR code' }, { quoted: ctx.raw });
-  if (command === 'short') { const result = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(need(text))}`, { signal: AbortSignal.timeout(15000) }); return reply(await result.text()); }
+  if (command === 'short') {
+    const result = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(need(text))}`, { signal: AbortSignal.timeout(15000) });
+    if (!result.ok) throw new Error(`URL shortener returned ${result.status}`);
+    return reply(await result.text());
+  }
 
   if (command === 'groupid') { if (!isGroup) throw new Error('Group only.'); return reply(chat); }
   if (command === 'groupinfo') { if (!isGroup) throw new Error('Group only.'); const m = ctx.metadata; return reply(`*${m.subject}*\nMembers: ${m.participants.length}\nOwner: ${m.owner ? jidNumber(m.owner) : 'Unknown'}\nDescription: ${m.desc || 'None'}`); }
@@ -95,16 +109,46 @@ export async function execute(ctx) {
   if (['promote','demote','kick'].includes(command)) { botAdmin(); if (!target) throw new Error('Mention or reply to a member.'); await sock.groupParticipantsUpdate(chat,[target],command === 'kick' ? 'remove' : command); return reply('Done.'); }
   if (command === 'mute' || command === 'unmute') { botAdmin(); await sock.groupSettingUpdate(chat, command === 'mute' ? 'announcement' : 'not_announcement'); return reply(`Group ${command}d.`); }
   if (command === 'tagall' || command === 'hidetag') { adminOnly(); const ids = ctx.metadata.participants.map(p=>p.id); return reply(command === 'tagall' ? `*Attention everyone*\n${ids.map(id=>`@${jidNumber(id)}`).join(' ')}` : (text || 'Attention'), ids); }
-  if (['setwelcome','setgoodbye','setrules'].includes(command)) { adminOnly(); const key = command.replace('set',''); store.updateGroup(chat,{[key]: key === 'rules' ? need(text) : onOff(args[0])}); return reply(`${key} updated.`); }
-  if (command === 'rules') return reply(store.getGroup(chat).rules || 'No rules have been set.');
-  if (['antilink','antibadwords'].includes(command)) { adminOnly(); store.updateGroup(chat,{[command]:onOff(args[0])}); return reply(`${command}: ${onOff(args[0])?'ON':'OFF'}`); }
+  if (['setwelcome','setgoodbye','setrules'].includes(command)) {
+    adminOnly();
+    const key = command.replace('set','');
+    const value = key === 'rules' ? need(text) : onOff(args[0]);
+    store.updateGroup(chat, { [key]: value });
+    return reply(`${key} updated.`);
+  }
+  if (command === 'rules') {
+    if (!isGroup) throw new Error('Group only.');
+    return reply(store.getGroup(chat).rules || 'No rules have been set.');
+  }
+  if (command === 'antilink') {
+    adminOnly();
+    const enabled = onOff(args[0]);
+    store.updateGroup(chat, {
+      antilink: enabled,
+      antiLinkMode: enabled ? 'delete' : 'off'
+    });
+    return reply(`antilink: ${enabled ? 'ON' : 'OFF'}`);
+  }
+  if (command === 'antibadwords') {
+    adminOnly();
+    const enabled = onOff(args[0]);
+    store.updateGroup(chat, { antibadwords: enabled });
+    return reply(`antibadwords: ${enabled ? 'ON' : 'OFF'}`);
+  }
   if (command === 'warn') { adminOnly(); if (!target) throw new Error('Mention or reply to a member.'); const g=store.getGroup(chat); g.warnings[target]=(g.warnings[target]||0)+1; store.updateGroup(chat,{warnings:g.warnings}); return reply(`Warning ${g.warnings[target]}/3 for @${jidNumber(target)}`,[target]); }
-  if (command === 'warnings') { if (!target) throw new Error('Mention or reply to a member.'); return reply(`Warnings: ${store.getGroup(chat).warnings[target]||0}/3`); }
+  if (command === 'warnings') { if (!isGroup) throw new Error('Group only.'); if (!target) throw new Error('Mention or reply to a member.'); return reply(`Warnings: ${store.getGroup(chat).warnings[target]||0}/3`); }
   if (command === 'clearwarn') { adminOnly(); if (!target) throw new Error('Mention or reply to a member.'); const g=store.getGroup(chat); delete g.warnings[target]; store.updateGroup(chat,{warnings:g.warnings}); return reply('Warnings cleared.'); }
 
   if (command === 'coinflip') return reply(pick(['Heads','Tails']));
   if (command === 'dice') return reply(`🎲 ${1+Math.floor(Math.random()*6)}`);
-  if (command === 'rps') { const mine=pick(['rock','paper','scissors']); return reply(`I chose ${mine}. You chose ${args[0]||'nothing'}.`); }
+  if (command === 'rps') {
+    const yours = String(args[0] || '').toLowerCase();
+    if (!['rock','paper','scissors'].includes(yours)) throw new Error('Usage: .rps rock|paper|scissors');
+    const mine = pick(['rock','paper','scissors']);
+    const win = (yours === 'rock' && mine === 'scissors') || (yours === 'paper' && mine === 'rock') || (yours === 'scissors' && mine === 'paper');
+    const result = yours === mine ? 'Draw.' : win ? 'You win.' : 'I win.';
+    return reply(`You: ${yours}\nVOID XMD: ${mine}\n${result}`);
+  }
   if (command === '8ball') return reply(pick(['Yes','No','Probably','Unlikely','Ask again later']));
   if (command === 'choose') return reply(pick(need(text).split('|').map(x=>x.trim()).filter(Boolean)));
   if (command === 'rate') return reply(`${Math.floor(Math.random()*101)}%`);
@@ -114,7 +158,20 @@ export async function execute(ctx) {
   if (command === 'truth') return reply(pick(['What is something you pretend not to care about?','What is your biggest unfinished goal?']));
   if (command === 'dare') return reply(pick(['Send a voice note singing for ten seconds.','Compliment the last person who messaged you.']));
   if (command === 'balance') return reply(`🪙 ${store.balance(sender)} coins`);
-  if (command === 'daily') return reply(`Daily reward claimed. Balance: ${store.addCoins(sender,100)} coins`);
+  if (command === 'daily') {
+    const claims = store.getGlobal('dailyClaims', {});
+    const now = Date.now();
+    const last = Number(claims[sender] || 0);
+    const remaining = 86400000 - (now - last);
+    if (last && remaining > 0) {
+      const hours = Math.floor(remaining / 3600000);
+      const minutes = Math.ceil((remaining % 3600000) / 60000);
+      return reply(`Daily reward already claimed. Try again in ${hours}h ${minutes}m.`);
+    }
+    claims[sender] = now;
+    store.setGlobal('dailyClaims', claims);
+    return reply(`Daily reward claimed: +100 coins\nBalance: ${store.addCoins(sender,100)} coins`);
+  }
   if (command === 'pay') { if (!target || !Number.isFinite(Number(args.at(-1)))) throw new Error('Mention someone and add an amount.'); const amount=Math.max(1,Math.floor(Number(args.at(-1)))); if(store.balance(sender)<amount) throw new Error('Insufficient balance.'); store.addCoins(sender,-amount); store.addCoins(target,amount); return reply(`Transferred ${amount} coins.`); }
 
   if (command === 'block' || command === 'unblock') { if (!isOwner) throw new Error('Owner only.'); if (!target) throw new Error('Mention or reply to a user.'); await sock.updateBlockStatus(target, command === 'block'?'block':'unblock'); return reply('Done.'); }

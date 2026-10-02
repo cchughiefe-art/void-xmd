@@ -36,7 +36,16 @@ export async function approveFeature(id){
   const file=path.join(draftsDir,`${id}.json`); const draft=JSON.parse(fs.readFileSync(file,'utf8')); validateCode(draft.code);
   const name=safeName(draft.code.match(/\bname\s*:\s*['"]([a-z0-9-]+)['"]/i)?.[1]); if(!name) throw new Error('Could not determine plugin name.');
   const target=path.join(pluginsDir,`${name}.mjs`), candidate=path.join(pluginsDir,`${name}.pending.mjs`);
-  fs.writeFileSync(candidate,draft.code); await run(process.execPath,['--check',candidate],10000); fs.renameSync(candidate,target);
+  fs.writeFileSync(candidate,draft.code);
+  await run(process.execPath,['--check',candidate],10000);
+  fs.renameSync(candidate,target);
+  try {
+    await loadPlugins();
+  } catch (error) {
+    fs.rmSync(target,{force:true});
+    await loadPlugins().catch(()=>{});
+    throw new Error(`Feature activation failed and was rolled back: ${error.message}`);
+  }
   draft.status='approved';draft.approvedAt=new Date().toISOString();fs.writeFileSync(file,JSON.stringify(draft,null,2));
-  await loadPlugins(); return {id,name};
+  return {id,name};
 }

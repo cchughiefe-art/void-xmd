@@ -37,5 +37,5 @@ export function renderMenu(senderName = 'User') {
     text += `\n╰─〔 ${name} 〕─╯\n`;
   }
 
-  return `${text}\n╭─〔 👑 ${config.name} 〕─╮\n│ ⚡ ${count} working commands loaded\n│ 💚 One menu • All commands\n╰─〔 SMART • FAST • POWERFUL 〕─╯`;
+  return `${text}\n╭─〔 👑 ${config.name} 〕─╮\n│ ⚡ ${count} commands loaded\n│ 💚 One menu • All commands\n╰─〔 SMART • FAST • POWERFUL 〕─╯`;
 }

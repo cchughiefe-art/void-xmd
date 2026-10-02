@@ -1,7 +1,12 @@
 import { store } from '../store.js';
 import { jidNumber, sleep } from '../utils.js';
 
-const onOff = value => ['on', 'true', '1', 'enable', 'enabled'].includes(String(value || '').toLowerCase());
+const onOff = value => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['on', 'true', '1', 'enable', 'enabled'].includes(normalized)) return true;
+  if (['off', 'false', '0', 'disable', 'disabled'].includes(normalized)) return false;
+  throw new Error('Use on or off.');
+};
 const phoneJid = value => {
   const digits = String(value || '').replace(/\D/g, '');
   return digits ? `${digits}@s.whatsapp.net` : '';
@@ -169,10 +174,10 @@ export default [
       };
       sock.ev.on('presence.update', handler);
       try {
-        for (const p of metadata.participants.slice(0, 100)) {
-          await sock.presenceSubscribe(p.id).catch(() => {});
-        }
-        await sleep(2500);
+        await Promise.all(
+          metadata.participants.slice(0, 100).map(p => sock.presenceSubscribe(p.id).catch(() => {}))
+        );
+        await sleep(1800);
       } finally {
         sock.ev.off?.('presence.update', handler);
       }
@@ -331,8 +336,7 @@ export default [
   groupToggle('autoreact'),
   groupToggle('chatbot'),
   globalToggle('anticall'),
-  globalToggle('autostatus'),
-  globalToggle('autoviewstatus'),
+  { ...globalToggle('autoviewstatus'), aliases: ['autostatus'] },
   globalToggle('autostatusreact'),
   globalToggle('autobio'),
   globalToggle('alwaysonline')

@@ -25,8 +25,8 @@ export function startWebServer(){
       const url=new URL(req.url,'http://localhost');
       if(req.method==='GET'&&(url.pathname==='/'||url.pathname==='/pair')){res.writeHead(200,{'content-type':'text/html; charset=utf-8','content-security-policy':"default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",'x-frame-options':'DENY'});return res.end(page);}
       if(req.method==='GET'&&url.pathname==='/health')return json(res,200,{name:config.name,status:'running',whatsapp:connectionState()?'connected':'connecting',uptime:Math.floor(process.uptime())});
-      if(req.method==='GET'&&url.pathname==='/api/status')return json(res,200,{...pairingState()});
       if(!authorized(req))return json(res,401,{error:'Invalid web admin key.'});
+      if(req.method==='GET'&&url.pathname==='/api/status')return json(res,200,{...pairingState()});
       if(req.method==='POST'&&url.pathname==='/api/pair'){const data=await body(req);return json(res,200,{code:await requestPairing(data.phone)});}
       if(req.method==='GET'&&url.pathname==='/api/features')return json(res,200,{drafts:listFeatureDrafts()});
       if(req.method==='POST'&&url.pathname==='/api/features/approve'){const data=await body(req);return json(res,200,await approveFeature(String(data.id||'')));}

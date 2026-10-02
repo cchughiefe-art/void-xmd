@@ -23,6 +23,17 @@ import {
   rememberMessage
 } from './automation.js';
 
+const originalConsoleInfo = console.info.bind(console);
+console.info = (...args) => {
+  const first = String(args[0] ?? '');
+  if (
+    first.startsWith('Closing session:') ||
+    first.startsWith('Opening session:') ||
+    first.startsWith('Removing old closed session:')
+  ) return;
+  originalConsoleInfo(...args);
+};
+
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 let activeSocket;
 let latestPairingCode = '';
@@ -266,7 +277,7 @@ export async function startBot() {
           jidNumber(sender) === config.owner ||
           (raw.key.fromMe && jidNumber(sock.user?.id) === config.owner);
 
-        if (config.mode === 'private' && !isOwner) continue;
+        if (store.getGlobal('mode', config.mode) === 'private' && !isOwner) continue;
 
         const reply = (message, mentions = []) =>
           sock.sendMessage(chat, { text: String(message), mentions }, { quoted: raw });
