@@ -1,12 +1,46 @@
 import { downloadMediaMessage, getContentType } from '@whiskeysockets/baileys';
 import pino from 'pino';
 
-function unwrap(message) {
+function unwrapAll(message) {
+  let current = message;
+  let wasViewOnce = false;
+
+  for (let i = 0; i < 10 && current; i++) {
+    if (current.ephemeralMessage?.message) {
+      current = current.ephemeralMessage.message;
+      continue;
+    }
+
+    if (current.documentWithCaptionMessage?.message) {
+      current = current.documentWithCaptionMessage.message;
+      continue;
+    }
+
+    const wrapper =
+      current.viewOnceMessage ||
+      current.viewOnceMessageV2 ||
+      current.viewOnceMessageV2Extension;
+
+    if (wrapper?.message) {
+      wasViewOnce = true;
+      current = wrapper.message;
+      continue;
+    }
+
+    break;
+  }
+
+  return { message: current || null, wasViewOnce };
+}
+
+function directMedia(message) {
   if (!message) return null;
-  if (message.viewOnceMessage?.message) return message.viewOnceMessage.message;
-  if (message.viewOnceMessageV2?.message) return message.viewOnceMessageV2.message;
-  if (message.viewOnceMessageV2Extension?.message) return message.viewOnceMessageV2Extension.message;
-  if (message.ephemeralMessage?.message) return unwrap(message.ephemeralMessage.message);
+
+  const type = getContentType(message);
+  if (['imageMessage', 'videoMessage', 'audioMessage'].includes(type)) {
+    return { message, type };
+  }
+
   return null;
 }
 
@@ -14,39 +48,51 @@ export default {
   name: 'vv1',
   aliases: ['vv', 'vv2', 'viewonce', 'antivv'],
   category: 'TOOLS',
-  description: 'Download and resend a replied view-once image/video',
+  description: 'Recover and resend a replied view-once image, video, or audio',
 
   async run({ quoted, sock, chat, raw }) {
     if (!quoted?.message) {
-      throw new Error('Reply to a view-once image or video with .vv1');
+      throw new Error('Reply to a view-once image/video/audio with .vv1');
     }
 
-    const mediaMessage = unwrap(quoted.message);
-    if (!mediaMessage) {
-      throw new Error('The replied message is not a supported view-once message.');
+    const unwrapped = unwrapAll(quoted.message);
+    const media = directMedia(unwrapped.message);
+
+    if (!media) {
+      throw new Error('The replied message does not contain recoverable image/video/audio media.');
     }
 
-    const mediaType = getContentType(mediaMessage);
-    if (!['imageMessage', 'videoMessage', 'audioMessage'].includes(mediaType)) {
-      throw new Error('Unsupported view-once media type.');
-    }
+    const { message: mediaMessage, type: mediaType } = media;
 
-    const buffer = await downloadMediaMessage(
-      {
-        key: {
-          remoteJid: chat,
-          id: quoted.stanzaId,
-          participant: quoted.participant
-        },
-        message: mediaMessage
+    const target = {
+      key: {
+        remoteJid: chat,
+        id: quoted.stanzaId,
+        participant: quoted.participant
       },
-      'buffer',
-      {},
-      {
-        logger: pino({ level: 'silent' }),
-        reuploadRequest: sock.updateMediaMessage
-      }
-    );
+      message: mediaMessage
+    };
+
+    let buffer;
+    try {
+      buffer = await downloadMediaMessage(
+        target,
+        'buffer',
+        {},
+        {
+          logger: pino({ level: 'silent' }),
+          reuploadRequest: sock.updateMediaMessage
+        }
+      );
+    } catch (error) {
+      throw new Error(
+        `Could not download the replied media. It may already have expired or been opened: ${error.message}`
+      );
+    }
+
+    if (!buffer?.length) {
+      throw new Error('WhatsApp returned no media data for that message.');
+    }
 
     if (mediaType === 'imageMessage') {
       await sock.sendMessage(chat, {
@@ -59,14 +105,15 @@ export default {
     if (mediaType === 'videoMessage') {
       await sock.sendMessage(chat, {
         video: buffer,
-        caption: mediaMessage.videoMessage?.caption || 'Recovered view-once video'
+        caption: mediaMessage.videoMessage?.caption || 'Recovered view-once video',
+        mimetype: mediaMessage.videoMessage?.mimetype || 'video/mp4'
       }, { quoted: raw });
       return;
     }
 
     await sock.sendMessage(chat, {
       audio: buffer,
-      mimetype: mediaMessage.audioMessage?.mimetype || 'audio/ogg',
+      mimetype: mediaMessage.audioMessage?.mimetype || 'audio/ogg; codecs=opus',
       ptt: Boolean(mediaMessage.audioMessage?.ptt)
     }, { quoted: raw });
   }

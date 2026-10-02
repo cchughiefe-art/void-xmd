@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import {
   downloadContentFromMessage,
   generateWAMessageContent,
-  generateWAMessageFromContent
+  generateWAMessageFromContent,
+  jidNormalizedUser
 } from '@whiskeysockets/baileys';
 
 const unwrap = message => {
@@ -77,6 +78,20 @@ async function payloadFromMessage(message, commandText = '') {
   return null;
 }
 
+async function getStatusRecipients(sock, groupJid) {
+  const metadata = await sock.groupMetadata(groupJid);
+  const recipients = new Set();
+
+  for (const participant of metadata?.participants || []) {
+    const jid = participant?.id || participant?.jid;
+    if (jid) recipients.add(jidNormalizedUser(jid));
+  }
+
+  if (sock.user?.id) recipients.add(jidNormalizedUser(sock.user.id));
+
+  return [...recipients].filter(Boolean);
+}
+
 async function sendGroupStatus(sock, groupJid, payload) {
   const inner = await generateWAMessageContent(payload, {
     upload: sock.waUploadToServer
@@ -96,15 +111,28 @@ async function sendGroupStatus(sock, groupJid, payload) {
       }
     },
     {
-      userJid: sock.user?.id
+      userJid: jidNormalizedUser(sock.user?.id || '')
     }
   );
 
+  const statusJidList = await getStatusRecipients(sock, groupJid);
+
+  if (!statusJidList.length) {
+    throw new Error('Could not resolve group members for the Status Update.');
+  }
+
   await sock.relayMessage(groupJid, message.message, {
-    messageId: message.key.id
+    messageId: message.key.id,
+    statusJidList,
+    additionalAttributes: {
+      messageId: message.key.id
+    }
   });
 
-  return message;
+  return {
+    message,
+    recipients: statusJidList.length
+  };
 }
 
 export default {
@@ -120,14 +148,16 @@ export default {
 
     if (!prepared) {
       throw new Error(
-        'Usage: .setgcs <text> OR reply to an image/video/audio with .setgcs [caption]'
+        'Usage: .gcs <text> OR reply to an image/video/audio with .gcs [caption]'
       );
     }
 
-    await sendGroupStatus(sock, chat, prepared.payload);
+    const result = await sendGroupStatus(sock, chat, prepared.payload);
 
     await reply(
-      `✅ ${prepared.kind} posted to this group's Status Update.\nIt should remain available for about 24 hours.`
+      `✅ ${prepared.kind} sent through the group Status Update protocol.\n` +
+      `Recipients resolved: ${result.recipients}\n` +
+      `If your WhatsApp account has Group Status enabled, it should appear for about 24 hours.`
     );
   }
 };
