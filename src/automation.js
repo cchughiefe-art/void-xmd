@@ -1,3 +1,4 @@
+import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import { config } from './config.js';
 import { store } from './store.js';
 import { jidNumber } from './utils.js';
@@ -5,6 +6,157 @@ import { askAi } from './ai-provider.js';
 
 const NSFW_WORDS = /\b(?:porn|porno|xxx|nudes?|sex\s*video|hentai|onlyfans)\b/i;
 const TEMU_LINK = /(?:https?:\/\/)?(?:www\.)?temu\.com\//i;
+
+const deletedMessageCache = new Map();
+const suppressedDeletes = new Set();
+
+const cacheKey = key => `${key?.remoteJid || ''}:${key?.id || ''}`;
+
+function pruneMessageCache() {
+  while (deletedMessageCache.size > 500) {
+    const first = deletedMessageCache.keys().next().value;
+    if (!first) break;
+    deletedMessageCache.delete(first);
+  }
+}
+
+export function rememberMessage(raw) {
+  if (!raw?.key?.id || raw.key.fromMe || raw.key.remoteJid === 'status@broadcast') return;
+  deletedMessageCache.set(cacheKey(raw.key), raw);
+  pruneMessageCache();
+}
+
+export function suppressAntiDelete(key) {
+  const id = cacheKey(key);
+  if (!id) return;
+  suppressedDeletes.add(id);
+  const timer = setTimeout(() => suppressedDeletes.delete(id), 30000);
+  timer.unref?.();
+}
+
+function unwrapViewOnce(message) {
+  let current = message;
+  let found = false;
+
+  for (let i = 0; i < 8 && current; i++) {
+    if (current.ephemeralMessage?.message) {
+      current = current.ephemeralMessage.message;
+      continue;
+    }
+
+    const wrapper =
+      current.viewOnceMessage ||
+      current.viewOnceMessageV2 ||
+      current.viewOnceMessageV2Extension;
+
+    if (wrapper?.message) {
+      found = true;
+      current = wrapper.message;
+      continue;
+    }
+
+    break;
+  }
+
+  return found ? current : null;
+}
+
+async function resendViewOnce(sock, chat, raw) {
+  const inner = unwrapViewOnce(raw.message);
+  if (!inner) return false;
+
+  const mediaType = inner.imageMessage
+    ? 'image'
+    : inner.videoMessage
+      ? 'video'
+      : inner.audioMessage
+        ? 'audio'
+        : '';
+
+  if (!mediaType) return false;
+
+  const content = inner[`${mediaType}Message`];
+  const stream = await downloadContentFromMessage(content, mediaType);
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  const buffer = Buffer.concat(chunks);
+
+  if (mediaType === 'image') {
+    await sock.sendMessage(chat, {
+      image: buffer,
+      caption: content.caption || 'View-once image preserved by anti-view-once.'
+    }, { quoted: raw });
+  } else if (mediaType === 'video') {
+    await sock.sendMessage(chat, {
+      video: buffer,
+      caption: content.caption || 'View-once video preserved by anti-view-once.',
+      mimetype: content.mimetype || 'video/mp4'
+    }, { quoted: raw });
+  } else {
+    await sock.sendMessage(chat, {
+      audio: buffer,
+      mimetype: content.mimetype || 'audio/ogg; codecs=opus',
+      ptt: Boolean(content.ptt)
+    }, { quoted: raw });
+  }
+
+  return true;
+}
+
+export async function handleDeletedMessages(sock, event) {
+  const keys = Array.isArray(event?.keys) ? event.keys : [];
+  for (const key of keys) {
+    const id = cacheKey(key);
+
+    if (suppressedDeletes.has(id)) {
+      suppressedDeletes.delete(id);
+      continue;
+    }
+
+    const cached = deletedMessageCache.get(id);
+    if (!cached) continue;
+
+    const chat = key.remoteJid;
+    if (!chat?.endsWith('@g.us')) continue;
+
+    const settings = store.getGroup(chat);
+    if (!settings.antidelete) continue;
+
+    const sender = cached.key.participant || cached.participant || '';
+    const mention = sender ? `@${jidNumber(sender)}` : 'A member';
+
+    await sock.sendMessage(chat, {
+      text: `Anti-delete\n${mention} deleted a message.`,
+      mentions: sender ? [sender] : []
+    }).catch(() => {});
+
+    await sock.sendMessage(chat, {
+      forward: cached,
+      force: true
+    }).catch(error => {
+      console.error('Anti-delete forward:', error.message);
+    });
+  }
+}
+
+export async function handleCalls(sock, calls = []) {
+  if (!store.getGlobal('anticall', false)) return;
+
+  for (const call of calls) {
+    if (call?.status !== 'offer' || !call.id || !call.from) continue;
+
+    await sock.rejectCall(call.id, call.from).catch(error => {
+      console.error('Anti-call reject:', error.message);
+    });
+
+    if (!call.isGroup) {
+      await sock.sendMessage(call.from, {
+        text: 'Calls are disabled for this bot account. Please send a message instead.'
+      }).catch(() => {});
+    }
+  }
+}
+
 
 async function aiReply(text) {
   return askAi(text, {
@@ -16,6 +168,7 @@ async function aiReply(text) {
 }
 
 async function removeMessage(sock, chat, raw, notice) {
+  suppressAntiDelete(raw.key);
   await sock.sendMessage(chat, { delete: raw.key }).catch(() => {});
   if (notice) await sock.sendMessage(chat, { text: notice }).catch(() => {});
 }
@@ -23,7 +176,7 @@ async function removeMessage(sock, chat, raw, notice) {
 export async function handleStatusAutomation(sock, raw) {
   if (raw.key.remoteJid !== 'status@broadcast') return false;
 
-  if (store.getGlobal('autoviewstatus', false)) {
+  if (store.getGlobal('autoviewstatus', false) || store.getGlobal('autostatus', false)) {
     await sock.readMessages([raw.key]).catch(() => {});
   }
 
@@ -63,6 +216,14 @@ export async function handleMessageAutomation(ctx) {
     await sock.sendMessage(chat, {
       react: { text: '👍', key: raw.key }
     }).catch(() => {});
+  }
+
+  if (settings.antiviewonce && !raw.key.fromMe) {
+    try {
+      await resendViewOnce(sock, chat, raw);
+    } catch (error) {
+      console.error('Anti-view-once:', error.message);
+    }
   }
 
   if (raw.key.fromMe || isAdmin) return false;

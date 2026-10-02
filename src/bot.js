@@ -16,8 +16,11 @@ import { store } from './store.js';
 import { jidNumber, sleep } from './utils.js';
 import {
   applyConnectionAutomation,
+  handleCalls,
+  handleDeletedMessages,
   handleMessageAutomation,
-  handleStatusAutomation
+  handleStatusAutomation,
+  rememberMessage
 } from './automation.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -146,6 +149,14 @@ export async function startBot() {
     console.log('No WhatsApp session. Open /pair to generate a pairing code.');
   }
 
+  sock.ev.on('call', calls => {
+    handleCalls(sock, calls).catch(error => logger.error(error));
+  });
+
+  sock.ev.on('messages.delete', event => {
+    handleDeletedMessages(sock, event).catch(error => logger.error(error));
+  });
+
   sock.ev.on('group-participants.update', async event => {
     const settings = store.getGroup(event.id);
     const meta = await sock.groupMetadata(event.id).catch(() => null);
@@ -179,6 +190,8 @@ export async function startBot() {
           await handleStatusAutomation(sock, raw);
           continue;
         }
+
+        rememberMessage(raw);
 
         const body = bodyOf(raw).trim();
         const chat = raw.key.remoteJid;

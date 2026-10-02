@@ -83,6 +83,8 @@ export default [
       const rows = [
         ['antilink', g.antiLinkMode || (g.antilink ? 'delete' : 'off')],
         ['antibad', g.antibadwords],
+        ['antidelete', g.antidelete],
+        ['antiviewonce', g.antiviewonce],
         ['antisticker', g.antisticker],
         ['antinsfw', g.antinsfw],
         ['antimedia', g.antimedia],
@@ -285,6 +287,8 @@ export default [
       await reply(`antilink-kick: ${enabled ? 'ON' : 'OFF'}`);
     }
   },
+  groupToggle('antidelete'),
+  groupToggle('antiviewonce'),
   groupToggle('antisticker'),
   groupToggle('antinsfw'),
   groupToggle('antimedia'),
@@ -326,6 +330,8 @@ export default [
   groupToggle('autoread'),
   groupToggle('autoreact'),
   groupToggle('chatbot'),
+  globalToggle('anticall'),
+  globalToggle('autostatus'),
   globalToggle('autoviewstatus'),
   globalToggle('autostatusreact'),
   globalToggle('autobio'),

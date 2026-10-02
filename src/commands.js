@@ -98,7 +98,6 @@ export async function execute(ctx) {
   if (['setwelcome','setgoodbye','setrules'].includes(command)) { adminOnly(); const key = command.replace('set',''); store.updateGroup(chat,{[key]: key === 'rules' ? need(text) : onOff(args[0])}); return reply(`${key} updated.`); }
   if (command === 'rules') return reply(store.getGroup(chat).rules || 'No rules have been set.');
   if (['antilink','antibadwords'].includes(command)) { adminOnly(); store.updateGroup(chat,{[command]:onOff(args[0])}); return reply(`${command}: ${onOff(args[0])?'ON':'OFF'}`); }
-  if (['anticall','antidelete','antiviewonce','autoreact','autostatus'].includes(command)) return reply('This protection is listed but disabled in the safe build until its behavior is configured.');
   if (command === 'warn') { adminOnly(); if (!target) throw new Error('Mention or reply to a member.'); const g=store.getGroup(chat); g.warnings[target]=(g.warnings[target]||0)+1; store.updateGroup(chat,{warnings:g.warnings}); return reply(`Warning ${g.warnings[target]}/3 for @${jidNumber(target)}`,[target]); }
   if (command === 'warnings') { if (!target) throw new Error('Mention or reply to a member.'); return reply(`Warnings: ${store.getGroup(chat).warnings[target]||0}/3`); }
   if (command === 'clearwarn') { adminOnly(); if (!target) throw new Error('Mention or reply to a member.'); const g=store.getGroup(chat); delete g.warnings[target]; store.updateGroup(chat,{warnings:g.warnings}); return reply('Warnings cleared.'); }
