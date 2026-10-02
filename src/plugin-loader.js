@@ -42,6 +42,18 @@ export function pluginMenu() {
   return groups;
 }
 
+export function pluginDetails() {
+  return primary.map(plugin => ({
+    name: plugin.name,
+    aliases: [...(plugin.aliases || [])],
+    category: plugin.category || 'PLUGINS',
+    description: plugin.description || 'Loaded modular VOID XMD command.',
+    ownerOnly: Boolean(plugin.ownerOnly),
+    groupOnly: Boolean(plugin.groupOnly),
+    adminOnly: Boolean(plugin.adminOnly)
+  }));
+}
+
 export async function executePlugin(ctx) {
   const plugin = registry.get(ctx.command);
   if (!plugin) return false;

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { config } from './config.js';
 import { renderMenu } from './menu.js';
+import { renderFullMenu } from './full-menu.js';
 import { store } from './store.js';
 import { fetchJson, formatRuntime, jidNumber, run } from './utils.js';
 import { executePlugin } from './plugin-loader.js';
@@ -28,6 +29,10 @@ export async function execute(ctx) {
   if (await executePlugin({ ...ctx, config })) return;
 
   if (['menu','help','commands'].includes(command)) return reply(renderMenu(ctx.pushName));
+  if (['menufull','fullmenu','helpfull'].includes(command)) {
+    for (const page of renderFullMenu(ctx.pushName)) await reply(page);
+    return;
+  }
   if (command === 'ping') return reply(`🏓 Pong: ${Date.now() - ctx.timestamp}ms`);
   if (command === 'runtime') return reply(`⏱️ ${formatRuntime(process.uptime())}`);
   if (command === 'botinfo') return reply(`*${config.name}*\nMode: ${config.mode}\nNode: ${process.version}\nPlatform: ${os.platform()} ${os.arch()}\nUptime: ${formatRuntime(process.uptime())}`);
