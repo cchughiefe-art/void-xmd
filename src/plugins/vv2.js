@@ -43,12 +43,6 @@ function directMedia(message) {
   return null;
 }
 
-function normalizeRecipient(jid) {
-  const value = String(jid || '').trim();
-  if (!value) return '';
-  return value;
-}
-
 async function sendCleanMedia(sock, jid, media, buffer) {
   if (media.type === 'imageMessage') {
     await sock.sendMessage(jid, { image: buffer });
@@ -73,10 +67,7 @@ async function sendCleanMedia(sock, jid, media, buffer) {
 async function deleteCommand(sock, chat, raw) {
   try {
     await sock.sendMessage(chat, { delete: raw.key });
-    return true;
-  } catch {
-    return false;
-  }
+  } catch {}
 }
 
 export default {
@@ -84,7 +75,7 @@ export default {
   aliases: ['viewonce2', 'vvprivate'],
   category: 'TOOLS',
   description: 'Recover replied view-once media and privately send a clean copy to the command sender and main owner',
-  ownerOnly: true,
+  ownerOnly: false,
 
   async run({ quoted, sock, chat, raw, sender }) {
     if (!quoted?.message) {
@@ -128,10 +119,7 @@ export default {
     }
 
     const ownerJid = `${config.owner}@s.whatsapp.net`;
-    const recipients = [...new Set([
-      normalizeRecipient(sender),
-      normalizeRecipient(ownerJid)
-    ].filter(Boolean))];
+    const recipients = [...new Set([sender, ownerJid].filter(Boolean))];
 
     for (const jid of recipients) {
       await sendCleanMedia(sock, jid, media, buffer);
