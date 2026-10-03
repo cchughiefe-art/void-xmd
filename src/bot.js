@@ -76,6 +76,85 @@ function clearGroupMetadataForSession(sessionId, jid = '') {
   }
 }
 
+function jidCandidates(...values) {
+  const out = new Set();
+
+  for (const value of values.flat(Infinity)) {
+    const raw = String(value || '').trim();
+    if (!raw) continue;
+
+    const number = jidNumber(raw);
+    if (number) out.add(number);
+  }
+
+  return out;
+}
+
+function participantCandidates(participant) {
+  return jidCandidates(
+    participant?.id,
+    participant?.phoneNumber,
+    participant?.lid
+  );
+}
+
+function candidateSetsIntersect(a, b) {
+  for (const value of a) {
+    if (b.has(value)) return true;
+  }
+  return false;
+}
+
+function participantMatches(participant, identities) {
+  return candidateSetsIntersect(
+    participantCandidates(participant),
+    jidCandidates(identities)
+  );
+}
+
+function accountIdentities(sock) {
+  return [
+    sock.user?.id,
+    sock.authState?.creds?.me?.id,
+    sock.authState?.creds?.me?.lid
+  ].filter(Boolean);
+}
+
+function adminFlags(metadata, sock, sender, raw) {
+  const admins = (metadata?.participants || []).filter(participant => Boolean(participant.admin));
+
+  const senderIdentities = [
+    sender,
+    raw?.key?.participant,
+    raw?.key?.participantAlt,
+    raw?.participant
+  ].filter(Boolean);
+
+  return {
+    isAdmin: admins.some(participant => participantMatches(participant, senderIdentities)),
+    isBotAdmin: admins.some(participant => participantMatches(participant, accountIdentities(sock)))
+  };
+}
+
+const ADMIN_STATE_COMMANDS = new Set([
+  'link',
+  'revokeinvite',
+  'promote',
+  'demote',
+  'kick',
+  'mute',
+  'unmute',
+  'tagall',
+  'hidetag',
+  'setwelcome',
+  'setgoodbye',
+  'setrules',
+  'antilink',
+  'antibadwords',
+  'warn',
+  'clearwarn'
+]);
+
 const bodyOf = message => {
   const m = message?.message;
   if (!m) return '';
@@ -354,9 +433,7 @@ function attachCommonEvents(record, sock) {
 
         if (isGroup) {
           metadata = await getGroupMetadataCached(sock, chat, sessionId);
-          const admins = metadata.participants.filter(p => p.admin).map(p => jidNumber(p.id));
-          isAdmin = admins.includes(jidNumber(sender));
-          isBotAdmin = admins.includes(jidNumber(sock.user?.id));
+          ({ isAdmin, isBotAdmin } = adminFlags(metadata, sock, sender, raw));
         }
 
         const messageType = getContentType(raw.message);
@@ -372,6 +449,15 @@ function attachCommonEvents(record, sock) {
 
         const command = head.toLowerCase();
         const text = args.join(' ');
+
+        // Group roles can change while our 60-second metadata cache is still
+        // warm. Admin-sensitive commands always refresh once before checking
+        // permissions so a newly promoted bot/account works immediately.
+        if (isGroup && ADMIN_STATE_COMMANDS.has(command)) {
+          metadata = await getGroupMetadataCached(sock, chat, sessionId, true);
+          ({ isAdmin, isBotAdmin } = adminFlags(metadata, sock, sender, raw));
+        }
+
         const isOwner = jidNumber(sender) === config.owner || (raw.key.fromMe && jidNumber(sock.user?.id) === config.owner);
         if (store.getGlobal('mode', config.mode) === 'private' && !isOwner) continue;
 
