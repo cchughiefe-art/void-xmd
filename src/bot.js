@@ -106,6 +106,9 @@ function createRecord({ id, authDir, phone = '', primary = false }) {
     loggedOut: false,
     pairingCode: '',
     pairingPromise: null,
+    pairingReady: false,
+    pairingReadyPromise: null,
+    resolvePairingReady: null,
     intentionalStop: false,
     reconnectTimer: null,
     stopConnectionAutomation: () => {}
@@ -135,12 +138,41 @@ async function currentWaVersion() {
   }
 }
 
+async function waitForPairingReady(record, timeoutMs = 20000) {
+  if (record.authState?.creds?.registered || record.connected) return;
+  if (record.pairingReady) return;
+
+  if (!record.pairingReadyPromise) {
+    record.pairingReadyPromise = new Promise(resolve => {
+      record.resolvePairingReady = resolve;
+    });
+  }
+
+  let timer;
+  try {
+    await Promise.race([
+      record.pairingReadyPromise,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('WhatsApp pairing socket was not ready in time. Try .adddevice again.')),
+          timeoutMs
+        );
+        timer.unref?.();
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function requestPairingFor(record, number) {
   const phone = String(number || '').replace(/\D/g, '');
   if (phone.length < 8 || phone.length > 15) throw new Error('Enter a valid international number without + or spaces.');
   if (!record?.socket) throw new Error('WhatsApp connection is still starting. Try again in a few seconds.');
   if (record.authState?.creds?.registered || record.connected) throw new Error('That WhatsApp session is already connected.');
   if (record.pairingPromise) return record.pairingPromise;
+
+  await waitForPairingReady(record);
 
   record.pairingPromise = (async () => {
     let lastError;
@@ -231,8 +263,11 @@ export async function addDevice(number) {
   const existing = findSession(phone);
   if (existing) {
     if (existing.connected) throw new Error('That WhatsApp number is already connected.');
-    if (existing.pairingCode) return { id: existing.id, phone, code: existing.pairingCode, reused: true };
-    throw new Error('A session for that number already exists. Use .devices to check it.');
+
+    // Failed/expired pairings should be disposable. Re-running .adddevice for
+    // the same number now creates a clean auth state and a fresh pairing code.
+    await stopRecord(existing, { logout: false, removeFiles: true });
+    sessions.delete(existing.id);
   }
 
   if (sessions.size >= maxSessions()) {
@@ -369,6 +404,10 @@ function attachCommonEvents(record, sock) {
 async function connectSession(record) {
   record.intentionalStop = false;
   record.loggedOut = false;
+  record.pairingReady = false;
+  record.pairingReadyPromise = new Promise(resolve => {
+    record.resolvePairingReady = resolve;
+  });
   fs.mkdirSync(record.authDir, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(record.authDir);
@@ -397,6 +436,12 @@ async function connectSession(record) {
   sock.ev.on('connection.update', async update => {
     if (record.socket !== sock) return;
 
+    if (update.qr && !state.creds.registered) {
+      record.pairingReady = true;
+      record.resolvePairingReady?.();
+      record.resolvePairingReady = null;
+    }
+
     if (record.primary && update.qr && !state.creds.registered && config.pairingNumber && !initialPairRequested) {
       initialPairRequested = true;
       try {
@@ -411,6 +456,8 @@ async function connectSession(record) {
       record.connected = true;
       record.loggedOut = false;
       record.pairingCode = '';
+      record.pairingReady = false;
+      record.resolvePairingReady = null;
       record.phone = record.phone || jidNumber(sock.user?.id);
       try { record.stopConnectionAutomation?.(); } catch {}
       record.stopConnectionAutomation = applyConnectionAutomation(sock);

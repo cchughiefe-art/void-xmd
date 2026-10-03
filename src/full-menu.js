@@ -15,7 +15,7 @@ const builtin = {
   health: 'Confirm that the bot process and WhatsApp connection handler are alive.',
   stats: 'Show tracked user count, tracked group count and current process memory usage.',
   devices: 'List every WhatsApp account/session currently managed by this VOID XMD process and show connection state.',
-  adddevice: 'Owner-only command that creates an additional WhatsApp session and returns a temporary phone-number pairing code.',
+  adddevice: 'Owner-only command that creates an additional WhatsApp session and returns a temporary phone-number pairing code. Re-run it for the same disconnected number to reset a failed pairing and get a fresh code.',
   removedevice: 'Owner-only command that logs out and permanently removes an additional WhatsApp session after confirmation.',
   ai: 'Send a prompt to the configured OpenAI-compatible AI provider and return its answer.',
   gpt: 'Alias-style AI chat command that sends a prompt to the configured OpenAI-compatible provider.',
