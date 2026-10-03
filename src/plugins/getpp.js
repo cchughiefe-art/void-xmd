@@ -63,7 +63,7 @@ async function profilePicture(sock, jid) {
 
 export default {
   name: 'getpp',
-  aliases: ['getdp', 'pp'],
+  aliases: ['getdp', 'pp', 'avatar'],
   category: 'TOOLS',
   description: 'Get a WhatsApp profile picture by number, mention, or replied message',
   ownerOnly: false,
