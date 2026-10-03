@@ -1,9 +1,9 @@
 import { downloadMediaMessage, getContentType } from '@whiskeysockets/baileys';
 import pino from 'pino';
+import { config } from '../config.js';
 
 function unwrapAll(message) {
   let current = message;
-  let wasViewOnce = false;
 
   for (let i = 0; i < 10 && current; i++) {
     if (current.ephemeralMessage?.message) {
@@ -22,7 +22,6 @@ function unwrapAll(message) {
       current.viewOnceMessageV2Extension;
 
     if (wrapper?.message) {
-      wasViewOnce = true;
       current = wrapper.message;
       continue;
     }
@@ -30,7 +29,7 @@ function unwrapAll(message) {
     break;
   }
 
-  return { message: current || null, wasViewOnce };
+  return current || null;
 }
 
 function directMedia(message) {
@@ -44,25 +43,32 @@ function directMedia(message) {
   return null;
 }
 
+async function deleteCommand(sock, chat, raw) {
+  try {
+    await sock.sendMessage(chat, { delete: raw.key });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default {
-  name: 'vv1',
-  aliases: ['vv', 'viewonce', 'antivv'],
+  name: 'vv2',
+  aliases: ['viewonce2', 'vvprivate'],
   category: 'TOOLS',
-  description: 'Recover and resend a replied view-once image, video, or audio',
+  description: 'Recover replied view-once media, send it privately to the configured owner, then remove the command message when WhatsApp permissions allow it.',
+  ownerOnly: true,
 
   async run({ quoted, sock, chat, raw }) {
     if (!quoted?.message) {
-      throw new Error('Reply to a view-once image/video/audio with .vv1');
+      throw new Error('Reply to a view-once image/video/audio with .vv2');
     }
 
-    const unwrapped = unwrapAll(quoted.message);
-    const media = directMedia(unwrapped.message);
+    const media = directMedia(unwrapAll(quoted.message));
 
     if (!media) {
       throw new Error('The replied message does not contain recoverable image/video/audio media.');
     }
-
-    const { message: mediaMessage, type: mediaType } = media;
 
     const target = {
       key: {
@@ -70,7 +76,7 @@ export default {
         id: quoted.stanzaId,
         participant: quoted.participant
       },
-      message: mediaMessage
+      message: media.message
     };
 
     let buffer;
@@ -94,27 +100,28 @@ export default {
       throw new Error('WhatsApp returned no media data for that message.');
     }
 
-    if (mediaType === 'imageMessage') {
-      await sock.sendMessage(chat, {
+    const ownerJid = `${config.owner}@s.whatsapp.net`;
+    const mediaMessage = media.message;
+
+    if (media.type === 'imageMessage') {
+      await sock.sendMessage(ownerJid, {
         image: buffer,
         caption: mediaMessage.imageMessage?.caption || 'Recovered view-once image'
-      }, { quoted: raw });
-      return;
-    }
-
-    if (mediaType === 'videoMessage') {
-      await sock.sendMessage(chat, {
+      });
+    } else if (media.type === 'videoMessage') {
+      await sock.sendMessage(ownerJid, {
         video: buffer,
         caption: mediaMessage.videoMessage?.caption || 'Recovered view-once video',
         mimetype: mediaMessage.videoMessage?.mimetype || 'video/mp4'
-      }, { quoted: raw });
-      return;
+      });
+    } else {
+      await sock.sendMessage(ownerJid, {
+        audio: buffer,
+        mimetype: mediaMessage.audioMessage?.mimetype || 'audio/ogg; codecs=opus',
+        ptt: Boolean(mediaMessage.audioMessage?.ptt)
+      });
     }
 
-    await sock.sendMessage(chat, {
-      audio: buffer,
-      mimetype: mediaMessage.audioMessage?.mimetype || 'audio/ogg; codecs=opus',
-      ptt: Boolean(mediaMessage.audioMessage?.ptt)
-    }, { quoted: raw });
+    await deleteCommand(sock, chat, raw);
   }
 };
