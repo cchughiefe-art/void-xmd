@@ -11,7 +11,7 @@ export const categories = {
   'PROTECTION': ['antilink','antibadwords'],
   'GAMES & FUN': ['coinflip','dice','rps','8ball','choose','rate','ship','joke','quote','truth','dare'],
   'ECONOMY': ['balance','daily','pay'],
-  'OWNER': ['block','unblock','restart','health','stats']
+  'OWNER': ['block','unblock','restart','health','stats','devices','adddevice','removedevice']
 };
 
 export function renderMenu(senderName = 'User') {

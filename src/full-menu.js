@@ -14,6 +14,9 @@ const builtin = {
   private: 'Owner-only command that immediately switches VOID XMD into private/owner-only mode and saves the setting persistently.',
   health: 'Confirm that the bot process and WhatsApp connection handler are alive.',
   stats: 'Show tracked user count, tracked group count and current process memory usage.',
+  devices: 'List every WhatsApp account/session currently managed by this VOID XMD process and show connection state.',
+  adddevice: 'Owner-only command that creates an additional WhatsApp session and returns a temporary phone-number pairing code.',
+  removedevice: 'Owner-only command that logs out and permanently removes an additional WhatsApp session after confirmation.',
   ai: 'Send a prompt to the configured OpenAI-compatible AI provider and return its answer.',
   gpt: 'Alias-style AI chat command that sends a prompt to the configured OpenAI-compatible provider.',
   explain: 'Ask the configured AI provider to explain supplied text or a topic in simpler terms.',
@@ -166,7 +169,10 @@ const explicitUsage = {
   pay: 'Mention/reply to a user with .pay <amount>',
   block: 'Mention/reply to a user with .block',
   unblock: 'Mention/reply to a user with .unblock',
-  restart: '.restart'
+  restart: '.restart',
+  devices: '.devices',
+  adddevice: '.adddevice <international WhatsApp number>',
+  removedevice: '.removedevice <number-or-id> CONFIRM'
 };
 
 const pluginUsage = {
@@ -370,7 +376,7 @@ function buildDetails() {
         category,
         description: builtin[name] || 'Built-in VOID XMD command.',
         aliases: builtinAliases[name] || [],
-        ownerOnly: ['public','private','block','unblock','restart'].includes(name),
+        ownerOnly: ['public','private','block','unblock','restart','devices','adddevice','removedevice'].includes(name),
         groupOnly: ['admins','groupinfo','groupid','link','revokeinvite','promote','demote','kick','mute','unmute','tagall','hidetag','warn','warnings','clearwarn','setwelcome','setgoodbye','setrules','rules','antilink','antibadwords'].includes(name),
         adminOnly: ['link','revokeinvite','promote','demote','kick','mute','unmute','tagall','hidetag','warn','clearwarn','setwelcome','setgoodbye','setrules','antilink','antibadwords'].includes(name)
       });

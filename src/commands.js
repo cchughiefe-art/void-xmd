@@ -28,6 +28,38 @@ export async function execute(ctx) {
   const botAdmin = () => { adminOnly(); if (!isBotAdmin) throw new Error('Make the bot a group admin first.'); };
   const target = ctx.mentions?.[0] || quoted?.participant || (args[0]?.replace(/\D/g,'') ? `${args[0].replace(/\D/g,'')}@s.whatsapp.net` : null);
 
+  if (command === 'devices') {
+    if (!isOwner) throw new Error('Owner only.');
+    if (!ctx.deviceManager) throw new Error('Multi-device manager is unavailable.');
+    const rows = ctx.deviceManager.list();
+    const lines = rows.map((device, index) => {
+      const icon = device.connected ? '✅' : device.loggedOut ? '⛔' : device.status === 'waiting-for-pair' ? '🟡' : '⚪';
+      const label = device.primary ? 'PRIMARY' : 'DEVICE';
+      const number = device.phone || jidNumber(device.jid) || device.id;
+      return `${index + 1}. ${icon} ${label} • ${number} • ${device.status}`;
+    });
+    return reply(`*${config.name} devices*\nConfigured: ${rows.length}/${ctx.deviceManager.max()}\n\n${lines.join('\n') || 'No WhatsApp sessions found.'}`);
+  }
+
+  if (command === 'adddevice') {
+    if (!isOwner) throw new Error('Owner only.');
+    if (!ctx.deviceManager) throw new Error('Multi-device manager is unavailable.');
+    const phone = String(args[0] || '').replace(/\D/g, '');
+    if (phone.length < 8) throw new Error('Usage: .adddevice 2348012345678');
+    await reply(`Creating an additional WhatsApp session for ${phone}…`);
+    const result = await ctx.deviceManager.add(phone);
+    return reply(`*Pairing code for ${result.phone}*\n*${result.code}*\n\nOn that WhatsApp account:\nLinked devices → Link a device → Link with phone number.\n\nThe code is temporary. Run .devices after pairing.`);
+  }
+
+  if (command === 'removedevice') {
+    if (!isOwner) throw new Error('Owner only.');
+    if (!ctx.deviceManager) throw new Error('Multi-device manager is unavailable.');
+    const id = String(args[0] || '').trim();
+    if (!id || String(args[1] || '').toUpperCase() !== 'CONFIRM') throw new Error('Usage: .removedevice NUMBER_OR_ID CONFIRM');
+    const removed = await ctx.deviceManager.remove(id);
+    return reply(`Removed and logged out WhatsApp device ${removed.phone || removed.id}.`);
+  }
+
   if (await executePlugin({ ...ctx, config })) return;
 
   if (['menu','help','commands'].includes(command)) return reply(renderMenu(ctx.pushName));
