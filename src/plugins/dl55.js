@@ -22,6 +22,7 @@ function cleanText(value) {
     .replace(/&#39;|&#x27;/gi, "'")
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
+    .replace(/&nbsp;/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -92,15 +93,71 @@ function buildSearchUrl(base, term) {
   return url;
 }
 
-function parseAnchors(html, baseUrl, term) {
+/**
+ * Match the same kind of XVideos result links that the user's working
+ * Termux/Python script uses:
+ *
+ *   <a href="/video...." title="Actual title">
+ *
+ * Crucially, only /video. links are accepted. This prevents nav/quality links
+ * such as "Liked videos", "360p", "1080p", etc. from entering the result list.
+ */
+function parseXvideosResults(html, baseUrl) {
+  const results = [];
+  const seen = new Set();
+
+  // Handles href before title.
+  const hrefFirst =
+    /<a\b[^>]*\bhref\s*=\s*["'](\/video\.[^"']+)["'][^>]*\btitle\s*=\s*["']([^"']+)["'][^>]*>/gi;
+
+  // Handles title before href.
+  const titleFirst =
+    /<a\b[^>]*\btitle\s*=\s*["']([^"']+)["'][^>]*\bhref\s*=\s*["'](\/video\.[^"']+)["'][^>]*>/gi;
+
+  let match;
+
+  while ((match = hrefFirst.exec(html))) {
+    const pathName = match[1];
+    const title = cleanText(match[2]);
+    if (!title) continue;
+
+    const full = new URL(pathName, baseUrl.origin).href;
+    if (seen.has(full)) continue;
+
+    seen.add(full);
+    results.push({ title, url: full });
+
+    if (results.length >= MAX_RESULTS) return results;
+  }
+
+  while ((match = titleFirst.exec(html))) {
+    const title = cleanText(match[1]);
+    const pathName = match[2];
+    if (!title) continue;
+
+    const full = new URL(pathName, baseUrl.origin).href;
+    if (seen.has(full)) continue;
+
+    seen.add(full);
+    results.push({ title, url: full });
+
+    if (results.length >= MAX_RESULTS) break;
+  }
+
+  return results;
+}
+
+function parseGenericResults(html, baseUrl, term) {
   const results = [];
   const seen = new Set();
   const lowerTerm = String(term || '').toLowerCase();
 
-  const anchorRe = /<a\b([^>]*?)href\s*=\s*["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi;
+  const anchorRe =
+    /<a\b([^>]*?)href\s*=\s*["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi;
+
   let match;
 
-  while ((match = anchorRe.exec(html)) && results.length < 80) {
+  while ((match = anchorRe.exec(html)) && results.length < MAX_RESULTS) {
     const attrs = `${match[1]} ${match[3]}`;
     const href = match[2].trim();
     const titleMatch = attrs.match(/\btitle\s*=\s*["']([^"']+)["']/i);
@@ -115,19 +172,14 @@ function parseAnchors(html, baseUrl, term) {
       continue;
     }
 
-    if (/xvideos\./i.test(baseUrl.hostname)) {
-      const pathname = new URL(full).pathname;
-      if (!/^\/video/i.test(pathname)) continue;
-    } else if (lowerTerm && title && !title.toLowerCase().includes(lowerTerm)) {
-      continue;
-    }
-
+    if (lowerTerm && title && !title.toLowerCase().includes(lowerTerm)) continue;
     if (!title || seen.has(full)) continue;
+
     seen.add(full);
     results.push({ title, url: full });
   }
 
-  return results.slice(0, MAX_RESULTS);
+  return results;
 }
 
 async function crawl(site, term) {
@@ -148,15 +200,22 @@ async function crawl(site, term) {
   }
 
   const html = await response.text();
-  const results = parseAnchors(html, searchUrl, term);
+
+  const results = /xvideos\./i.test(base.hostname)
+    ? parseXvideosResults(html, searchUrl)
+    : parseGenericResults(html, searchUrl, term);
 
   if (!results.length) {
     throw new Error(
-      'No results could be parsed automatically. The site may use JavaScript rendering or a different search layout.'
+      'No real video results could be parsed. The site may have changed its HTML or returned a challenge page.'
     );
   }
 
   return { searchUrl: searchUrl.href, results };
+}
+
+function looksLikeSite(value) {
+  return /^(?:https?:\/\/)?(?:www\.)?[^/\s]+\.[a-z]{2,}(?:\/.*)?$/i.test(value);
 }
 
 function parseSearchInput(text) {
@@ -171,10 +230,19 @@ function parseSearchInput(text) {
   }
 
   const parts = raw.split(/\s+/);
-  if (parts.length >= 2 && /[./]/.test(parts[0])) {
+
+  if (parts.length >= 2 && looksLikeSite(parts[0])) {
     return {
       site: parts.shift(),
-      term: parts.join(' ')
+      term: parts.join(' ').trim()
+    };
+  }
+
+  // Do not silently treat a website hostname as the search query.
+  if (parts.length === 1 && looksLikeSite(parts[0])) {
+    return {
+      site: parts[0],
+      term: ''
     };
   }
 
@@ -189,12 +257,21 @@ async function downloadSelected(item) {
   const template = path.join(dir, '%(title).80s.%(ext)s');
 
   try {
+    // Extra validation prevents a bad crawler result from reaching yt-dlp.
+    const target = new URL(item.url);
+    if (/xvideos\./i.test(target.hostname) && !/^\/video\./i.test(target.pathname)) {
+      throw new Error('Selected XVideos result is not a real video page.');
+    }
+
     const output = await run(
       'yt-dlp',
       [
         '--no-playlist',
         '--no-warnings',
         '--restrict-filenames',
+        '--retries', '3',
+        '--extractor-retries', '3',
+        '--user-agent', UA,
         '--print', 'after_move:filepath',
         '-f', 'best[ext=mp4]/best',
         '-o', template,
@@ -203,7 +280,11 @@ async function downloadSelected(item) {
       180000
     );
 
-    const lines = String(output || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+    const lines = String(output || '')
+      .split(/\r?\n/)
+      .map(v => v.trim())
+      .filter(Boolean);
+
     let file = lines.at(-1);
 
     if (!file || !fs.existsSync(file)) {
@@ -230,7 +311,7 @@ const plugin = {
   name: 'dl55',
   aliases: ['crawlerdl'],
   category: 'DOWNLOADERS',
-  description: 'Search a website, list up to 15 parsed results, then download a selected result with yt-dlp.',
+  description: 'Search a website, list real video results, then download a selected result with yt-dlp.',
   ownerOnly: false,
 
   async run({ text, sender, sessionId, reply, sock, chat }) {
@@ -240,8 +321,9 @@ const plugin = {
     if (!value) {
       throw new Error(
         'Usage:\n' +
-        '.dl55 xvideos.com | search term\n' +
-        '.dl55 example.com | search term\n\n' +
+        '.dl55 xvideos.com | SEARCH TERM\n' +
+        '.dl55 xvideos.com SEARCH TERM\n' +
+        '.dl55 SEARCH TERM\n\n' +
         'Then choose with: .dl55 1'
       );
     }
@@ -270,23 +352,16 @@ const plugin = {
         const name = safeName(path.basename(file));
 
         if (['.mp4', '.m4v', '.mov', '.webm'].includes(ext)) {
-          await sock.sendMessage(
-            chat,
-            {
-              video: { url: file },
-              caption: '',
-              fileName: name
-            }
-          );
+          await sock.sendMessage(chat, {
+            video: { url: file },
+            fileName: name
+          });
         } else {
-          await sock.sendMessage(
-            chat,
-            {
-              document: { url: file },
-              mimetype: 'application/octet-stream',
-              fileName: name
-            }
-          );
+          await sock.sendMessage(chat, {
+            document: { url: file },
+            mimetype: 'application/octet-stream',
+            fileName: name
+          });
         }
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -302,9 +377,15 @@ const plugin = {
     }
 
     const { site, term } = parseSearchInput(value);
-    if (!term) throw new Error('Add a search term.');
+
+    if (!term) {
+      throw new Error(
+        `Add a search term.\nExample: .dl55 ${site} | SEARCH TERM`
+      );
+    }
 
     const found = await crawl(site, term);
+
     searches.set(sessionKey, {
       at: Date.now(),
       results: found.results
