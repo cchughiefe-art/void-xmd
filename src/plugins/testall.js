@@ -22,11 +22,15 @@ const CORE_COMMANDS = [
   'restart','health','stats','devices','adddevice','removedevice'
 ];
 
-const YTDLP_COMMANDS = new Set([
-  'play','ytmp3','yt','tiktok','instagram','twitter','facebook','socialdl',
-  'music','play2','playdoc','playch','video','video2','videodoc','fbdl','igdl',
-  'pinterestdl','douyin','aio','snackvideo','soundcloud','spotify','videy',
-  'xnxxdl','xxxdl','dlanime','animedl','dlmovie','dlseries','savetube','ytmp4'
+const YOUTUBE_COMMANDS = new Set([
+  'play','ytmp3','yt','music','play2','playdoc','playch',
+  'video','video2','videodoc','spotify','savetube','ytmp4'
+]);
+
+const OTHER_YTDLP_COMMANDS = new Set([
+  'tiktok','instagram','twitter','facebook','socialdl','fbdl','igdl',
+  'pinterestdl','douyin','aio','snackvideo','soundcloud','videy',
+  'xnxxdl','xxxdl','dlanime','animedl','dlmovie','dlseries'
 ]);
 
 const DESTRUCTIVE = new Map([
@@ -258,6 +262,11 @@ async function externalProbes(ctx, rows, systemRows) {
     detail: version.detail,
     ms: version.ms
   });
+  systemRows.push({
+    name: 'yt-dlp channel',
+    status: 'PASS',
+    detail: `${auth.channel || 'nightly'} via ${auth.repository || 'yt-dlp/yt-dlp-nightly-builds'}`
+  });
 
   const directYoutube = await timed(async () => {
     return await run(
@@ -306,13 +315,25 @@ async function externalProbes(ctx, rows, systemRows) {
     ? 'shared yt-dlp URL + search backend passed live extraction'
     : `yt-dlp backend failed: ${directYoutube.ok ? searchYoutube.detail : directYoutube.detail}`;
 
-  for (const command of YTDLP_COMMANDS) {
+  for (const command of YOUTUBE_COMMANDS) {
     if (!rows.has(command)) continue;
     rows.set(command, {
       command,
       status: ytOk ? 'PASS' : 'FAIL',
-      kind: 'shared live downloader backend',
+      kind: 'shared YouTube backend',
       detail: ytDetail
+    });
+  }
+
+  for (const command of OTHER_YTDLP_COMMANDS) {
+    if (!rows.has(command)) continue;
+    rows.set(command, {
+      command,
+      status: version.ok ? 'BACKEND' : 'FAIL',
+      kind: 'yt-dlp runtime only',
+      detail: version.ok
+        ? 'yt-dlp runtime passed; this site-specific extractor was not live-tested'
+        : `yt-dlp runtime failed: ${version.detail}`
     });
   }
 
@@ -377,7 +398,7 @@ function applySkipReasons(rows) {
   for (const [command, reason] of NEEDS_CONTEXT) {
     if (!rows.has(command)) continue;
     const current = rows.get(command);
-    if (current.status === 'PASS' || current.status === 'FAIL') continue;
+    if (['PASS','FAIL','BACKEND'].includes(current.status)) continue;
     rows.set(command, {
       command,
       status: 'SKIP',
@@ -446,7 +467,7 @@ function renderLog({ started, finished, rows, systemRows, collisions, sessionId 
   lines.push(
     '',
     'NOTE',
-    'SKIP does not mean broken. TESTALL deliberately does not auto-execute commands that would kick/block users, mutate groups/economy, create/delete resources, restart the bot, or require a real quoted media/group target.'
+    'PASS = exact safe command/provider path passed. BACKEND = shared runtime passed but the site-specific extractor was not live-tested. SKIP = intentionally not executed because it would mutate real state or needs a live target.'
   );
 
   return lines.join('\n');

@@ -41,8 +41,15 @@ function spawnRun(bin, args, timeout = 120000) {
   });
 }
 
-const YTDLP_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+const YTDLP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const YTDLP_CHANNEL = String(process.env.YTDLP_CHANNEL || 'nightly').trim().toLowerCase();
 let ytDlpPromise;
+
+function ytDlpRepo() {
+  if (YTDLP_CHANNEL === 'stable') return 'yt-dlp/yt-dlp';
+  if (YTDLP_CHANNEL === 'master') return 'yt-dlp/yt-dlp-master-builds';
+  return 'yt-dlp/yt-dlp-nightly-builds';
+}
 
 function managedYtDlpPath() {
   return path.join(config.dataDir, 'bin', 'yt-dlp');
@@ -70,6 +77,8 @@ export function ytDlpAuthStatus() {
     cookieFile,
     present,
     size,
+    channel: YTDLP_CHANNEL,
+    repository: ytDlpRepo(),
     managedBinary: managedYtDlpPath(),
     managedBinaryPresent: fs.existsSync(managedYtDlpPath())
   };
@@ -91,7 +100,7 @@ async function downloadLatestYtDlp(target) {
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
 
-  const base = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download';
+  const base = `https://github.com/${ytDlpRepo()}/releases/latest/download`;
   const [binaryResponse, sumsResponse] = await Promise.all([
     fetch(`${base}/${asset}`, { signal: AbortSignal.timeout(120000) }),
     fetch(`${base}/SHA2-256SUMS`, { signal: AbortSignal.timeout(30000) })
@@ -160,28 +169,47 @@ function hasArg(args, name) {
   return args.some(arg => String(arg) === name || String(arg).startsWith(`${name}=`));
 }
 
-function prepareYtDlpArgs(args) {
-  const prepared = [...args];
+function isYouTubeInvocation(args) {
+  return args.some(value => {
+    const s = String(value || '');
+    return /^(?:ytsearch|ytsearchdate)\d*:/i.test(s) ||
+      /(?:youtube\.com|youtu\.be|music\.youtube\.com)/i.test(s);
+  });
+}
 
-  // Current yt-dlp YouTube support benefits from a JS runtime. Node already
-  // exists on VOID XMD hosts, so explicitly enable it.
+function prepareYtDlpArgs(args, { useCookies = true } = {}) {
+  const prepared = [...args];
+  const youtube = isYouTubeInvocation(prepared);
+
   if (!hasArg(prepared, '--js-runtimes') && !hasArg(prepared, '--no-js-runtimes')) {
     prepared.unshift('--js-runtimes', 'node');
   }
 
-  // Allow yt-dlp to obtain its official EJS component when YouTube needs it.
   if (!hasArg(prepared, '--remote-components')) {
     prepared.unshift('--remote-components', 'ejs:github');
   }
 
   const auth = ytDlpAuthStatus();
-  if (
-    auth.present &&
-    !hasArg(prepared, '--cookies') &&
-    !hasArg(prepared, '--cookies-from-browser')
-  ) {
+  const explicitCookies =
+    hasArg(prepared, '--cookies') ||
+    hasArg(prepared, '--cookies-from-browser');
+
+  const managedCookies = youtube && useCookies && auth.present && !explicitCookies;
+
+  if (managedCookies) {
     try { fs.chmodSync(auth.cookieFile, 0o600); } catch {}
     prepared.unshift('--cookies', auth.cookieFile);
+  }
+
+  if (
+    youtube &&
+    (managedCookies || explicitCookies) &&
+    !hasArg(prepared, '--extractor-args')
+  ) {
+    const clients = String(
+      process.env.YTDLP_YOUTUBE_PLAYER_CLIENTS || 'default,web_embedded'
+    ).trim();
+    prepared.unshift('--extractor-args', `youtube:player_client=${clients}`);
   }
 
   return prepared;
@@ -206,6 +234,13 @@ function ytDlpFriendlyError(error) {
     );
   }
 
+  if (/the page needs to be reloaded/i.test(message)) {
+    return new Error(
+      'YouTube rejected the logged-in player client. VOID XMD is now configured for the current ' +
+      'default,web_embedded workaround and nightly yt-dlp. Run .ytrefresh then .yttest.'
+    );
+  }
+
   if (/cookies.*expired|account.*authentication|login required/i.test(message) && auth.present) {
     return new Error(
       `The saved yt-dlp cookies may be expired or invalid. Replace ${auth.cookieFile} with a fresh export and retry.`
@@ -218,23 +253,22 @@ function ytDlpFriendlyError(error) {
 export async function run(bin, args, timeout = 120000) {
   if (bin !== 'yt-dlp') return spawnRun(bin, args, timeout);
 
-  const prepared = prepareYtDlpArgs(args);
-
   let local;
   try {
     local = await ensureYtDlp();
   } catch {
-    // Fall back to the host's yt-dlp when the managed binary cannot be
-    // installed/refreshed. This keeps the bot usable during GitHub outages.
     local = 'yt-dlp';
   }
+
+  const youtube = isYouTubeInvocation(args);
+  const auth = ytDlpAuthStatus();
+  const prepared = prepareYtDlpArgs(args, { useCookies: true });
 
   try {
     return await spawnRun(local, prepared, timeout);
   } catch (error) {
-    // If the managed path disappeared or cannot execute, one final fallback to
-    // the host binary is useful. Do not retry authentication failures.
     const message = String(error?.message || '');
+
     if (
       local !== 'yt-dlp' &&
       (error?.code === 'ENOENT' || /ENOENT|not found/i.test(message))
@@ -242,8 +276,21 @@ export async function run(bin, args, timeout = 120000) {
       try {
         return await spawnRun('yt-dlp', prepared, timeout);
       } catch (fallbackError) {
-        throw ytDlpFriendlyError(fallbackError);
+        error = fallbackError;
       }
+    }
+
+    if (
+      youtube &&
+      auth.present &&
+      !hasArg(args, '--cookies') &&
+      !hasArg(args, '--cookies-from-browser') &&
+      /the page needs to be reloaded/i.test(String(error?.message || error))
+    ) {
+      try {
+        const anonymous = prepareYtDlpArgs(args, { useCookies: false });
+        return await spawnRun(local, anonymous, timeout);
+      } catch {}
     }
 
     throw ytDlpFriendlyError(error);
