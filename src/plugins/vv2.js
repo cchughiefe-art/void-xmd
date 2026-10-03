@@ -43,6 +43,33 @@ function directMedia(message) {
   return null;
 }
 
+function normalizeRecipient(jid) {
+  const value = String(jid || '').trim();
+  if (!value) return '';
+  return value;
+}
+
+async function sendCleanMedia(sock, jid, media, buffer) {
+  if (media.type === 'imageMessage') {
+    await sock.sendMessage(jid, { image: buffer });
+    return;
+  }
+
+  if (media.type === 'videoMessage') {
+    await sock.sendMessage(jid, {
+      video: buffer,
+      mimetype: media.message.videoMessage?.mimetype || 'video/mp4'
+    });
+    return;
+  }
+
+  await sock.sendMessage(jid, {
+    audio: buffer,
+    mimetype: media.message.audioMessage?.mimetype || 'audio/ogg; codecs=opus',
+    ptt: Boolean(media.message.audioMessage?.ptt)
+  });
+}
+
 async function deleteCommand(sock, chat, raw) {
   try {
     await sock.sendMessage(chat, { delete: raw.key });
@@ -56,10 +83,10 @@ export default {
   name: 'vv2',
   aliases: ['viewonce2', 'vvprivate'],
   category: 'TOOLS',
-  description: 'Recover replied view-once media, send it privately to the configured owner, then remove the command message when WhatsApp permissions allow it.',
+  description: 'Recover replied view-once media and privately send a clean copy to the command sender and main owner',
   ownerOnly: true,
 
-  async run({ quoted, sock, chat, raw }) {
+  async run({ quoted, sock, chat, raw, sender }) {
     if (!quoted?.message) {
       throw new Error('Reply to a view-once image/video/audio with .vv2');
     }
@@ -101,25 +128,13 @@ export default {
     }
 
     const ownerJid = `${config.owner}@s.whatsapp.net`;
-    const mediaMessage = media.message;
+    const recipients = [...new Set([
+      normalizeRecipient(sender),
+      normalizeRecipient(ownerJid)
+    ].filter(Boolean))];
 
-    if (media.type === 'imageMessage') {
-      await sock.sendMessage(ownerJid, {
-        image: buffer,
-        caption: mediaMessage.imageMessage?.caption || 'Recovered view-once image'
-      });
-    } else if (media.type === 'videoMessage') {
-      await sock.sendMessage(ownerJid, {
-        video: buffer,
-        caption: mediaMessage.videoMessage?.caption || 'Recovered view-once video',
-        mimetype: mediaMessage.videoMessage?.mimetype || 'video/mp4'
-      });
-    } else {
-      await sock.sendMessage(ownerJid, {
-        audio: buffer,
-        mimetype: mediaMessage.audioMessage?.mimetype || 'audio/ogg; codecs=opus',
-        ptt: Boolean(mediaMessage.audioMessage?.ptt)
-      });
+    for (const jid of recipients) {
+      await sendCleanMedia(sock, jid, media, buffer);
     }
 
     await deleteCommand(sock, chat, raw);

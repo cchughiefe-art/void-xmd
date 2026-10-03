@@ -3,7 +3,6 @@ import pino from 'pino';
 
 function unwrapAll(message) {
   let current = message;
-  let wasViewOnce = false;
 
   for (let i = 0; i < 10 && current; i++) {
     if (current.ephemeralMessage?.message) {
@@ -22,7 +21,6 @@ function unwrapAll(message) {
       current.viewOnceMessageV2Extension;
 
     if (wrapper?.message) {
-      wasViewOnce = true;
       current = wrapper.message;
       continue;
     }
@@ -30,7 +28,7 @@ function unwrapAll(message) {
     break;
   }
 
-  return { message: current || null, wasViewOnce };
+  return current || null;
 }
 
 function directMedia(message) {
@@ -48,21 +46,18 @@ export default {
   name: 'vv1',
   aliases: ['vv', 'viewonce', 'antivv'],
   category: 'TOOLS',
-  description: 'Recover and resend a replied view-once image, video, or audio',
+  description: 'Recover and resend a replied view-once image, video, or audio with no added text or caption',
 
-  async run({ quoted, sock, chat, raw }) {
+  async run({ quoted, sock, chat }) {
     if (!quoted?.message) {
       throw new Error('Reply to a view-once image/video/audio with .vv1');
     }
 
-    const unwrapped = unwrapAll(quoted.message);
-    const media = directMedia(unwrapped.message);
+    const media = directMedia(unwrapAll(quoted.message));
 
     if (!media) {
       throw new Error('The replied message does not contain recoverable image/video/audio media.');
     }
-
-    const { message: mediaMessage, type: mediaType } = media;
 
     const target = {
       key: {
@@ -70,7 +65,7 @@ export default {
         id: quoted.stanzaId,
         participant: quoted.participant
       },
-      message: mediaMessage
+      message: media.message
     };
 
     let buffer;
@@ -94,27 +89,23 @@ export default {
       throw new Error('WhatsApp returned no media data for that message.');
     }
 
-    if (mediaType === 'imageMessage') {
-      await sock.sendMessage(chat, {
-        image: buffer,
-        caption: mediaMessage.imageMessage?.caption || 'Recovered view-once image'
-      }, { quoted: raw });
+    if (media.type === 'imageMessage') {
+      await sock.sendMessage(chat, { image: buffer });
       return;
     }
 
-    if (mediaType === 'videoMessage') {
+    if (media.type === 'videoMessage') {
       await sock.sendMessage(chat, {
         video: buffer,
-        caption: mediaMessage.videoMessage?.caption || 'Recovered view-once video',
-        mimetype: mediaMessage.videoMessage?.mimetype || 'video/mp4'
-      }, { quoted: raw });
+        mimetype: media.message.videoMessage?.mimetype || 'video/mp4'
+      });
       return;
     }
 
     await sock.sendMessage(chat, {
       audio: buffer,
-      mimetype: mediaMessage.audioMessage?.mimetype || 'audio/ogg; codecs=opus',
-      ptt: Boolean(mediaMessage.audioMessage?.ptt)
-    }, { quoted: raw });
+      mimetype: media.message.audioMessage?.mimetype || 'audio/ogg; codecs=opus',
+      ptt: Boolean(media.message.audioMessage?.ptt)
+    });
   }
 };
