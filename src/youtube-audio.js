@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { run } from './utils.js';
+import { run, sleep } from './utils.js';
 
 const isUrl = value => /^https?:\/\//i.test(String(value || '').trim());
 const isYouTubeUrl = value => /(?:youtube\.com|youtu\.be|music\.youtube\.com)/i.test(String(value || ''));
@@ -17,6 +17,7 @@ function findMp3(folder) {
     .map(name => ({ name, full: path.join(folder, name) }))
     .filter(item => fs.statSync(item.full).isFile())
     .sort((a, b) => fs.statSync(b.full).mtimeMs - fs.statSync(a.full).mtimeMs);
+
   return files[0]?.full || '';
 }
 
@@ -33,6 +34,28 @@ function commonArgs(folder, maxFilesize, maxDuration) {
     '--restrict-filenames',
     '-o', path.join(folder, '%(title).100B-%(id)s.%(ext)s')
   ];
+}
+
+function shortError(error, max = 420) {
+  const text = String(error?.message || error || 'unknown error')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length <= max ? text : `${text.slice(0, max - 3)}...`;
+}
+
+async function tryStrategy({ name, args, source, folder, timeout }) {
+  clearFolder(folder);
+
+  try {
+    await run('yt-dlp', [...args, source], timeout);
+
+    const file = findMp3(folder);
+    if (!file) throw new Error('yt-dlp completed but produced no MP3.');
+
+    return { ok: true, file, strategy: name };
+  } catch (error) {
+    return { ok: false, error, strategy: name };
+  }
 }
 
 export function youtubeSource(input) {
@@ -53,42 +76,64 @@ export async function downloadYoutubeAudio(input, folder, options = {}) {
   const timeout = Number(options.timeout || 180000);
   const base = commonArgs(folder, maxFilesize, maxDuration);
 
-  let primaryError;
-  try {
-    await run('yt-dlp', [
-      ...base,
-      '-f', 'bestaudio[ext=m4a]/bestaudio/b[acodec!=none]',
-      source
-    ], timeout);
+  const strategies = [
+    {
+      name: 'account-default',
+      args: [...base]
+    },
+    {
+      name: 'account-web-safari-hls',
+      args: [
+        ...base,
+        '--extractor-args', 'youtube:player_client=default,web_safari'
+      ],
+      retry: 2
+    },
+    {
+      name: 'anonymous-visionos',
+      args: [
+        ...base,
+        '--no-cookies',
+        '--no-cookies-from-browser',
+        '--extractor-args', 'youtube:player_client=visionos'
+      ]
+    },
+    {
+      name: 'anonymous-android',
+      args: [
+        ...base,
+        '--no-cookies',
+        '--no-cookies-from-browser',
+        '--extractor-args', 'youtube:player_client=android'
+      ]
+    }
+  ];
 
-    const file = findMp3(folder);
-    if (!file) throw new Error('Primary YouTube audio extraction produced no MP3.');
-    return { file, strategy: 'audio-only' };
-  } catch (error) {
-    primaryError = error;
+  const failures = [];
+
+  for (const strategy of strategies) {
+    const attempts = Number(strategy.retry || 1);
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const result = await tryStrategy({
+        ...strategy,
+        source,
+        folder,
+        timeout
+      });
+
+      if (result.ok) return result;
+
+      failures.push(
+        `${strategy.name}${attempts > 1 ? `#${attempt}` : ''}: ${shortError(result.error)}`
+      );
+
+      if (attempt < attempts) await sleep(1500);
+    }
   }
 
-  // Current YouTube cookie sessions can expose metadata correctly while
-  // audio-only format extraction fails with "The page needs to be reloaded".
-  // web_embedded commonly still exposes format 18 (combined A/V). Downloading
-  // that format and letting ffmpeg extract its audio keeps .music working.
-  clearFolder(folder);
-
-  try {
-    await run('yt-dlp', [
-      ...base,
-      '--extractor-args', 'youtube:player_client=web_embedded',
-      '-f', '18/b[acodec!=none]/b',
-      source
-    ], timeout);
-
-    const file = findMp3(folder);
-    if (!file) throw new Error('Embedded YouTube fallback produced no MP3.');
-    return { file, strategy: 'web-embedded-format-18' };
-  } catch (fallbackError) {
-    throw new Error(
-      `YouTube audio download failed. Primary: ${String(primaryError?.message || primaryError).slice(0, 350)} ` +
-      `Fallback: ${String(fallbackError?.message || fallbackError).slice(0, 350)}`
-    );
-  }
+  throw new Error(
+    'YouTube audio download failed after all automatic strategies.\n' +
+    failures.map((x, i) => `${i + 1}. ${x}`).join('\n')
+  );
 }

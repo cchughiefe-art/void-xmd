@@ -194,7 +194,16 @@ function prepareYtDlpArgs(args, { useCookies = true } = {}) {
     hasArg(prepared, '--cookies') ||
     hasArg(prepared, '--cookies-from-browser');
 
-  const managedCookies = youtube && useCookies && auth.present && !explicitCookies;
+  const cookiesDisabled =
+    hasArg(prepared, '--no-cookies') ||
+    hasArg(prepared, '--no-cookies-from-browser');
+
+  const managedCookies =
+    youtube &&
+    useCookies &&
+    auth.present &&
+    !explicitCookies &&
+    !cookiesDisabled;
 
   if (managedCookies) {
     try { fs.chmodSync(auth.cookieFile, 0o600); } catch {}
