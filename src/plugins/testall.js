@@ -310,10 +310,33 @@ async function externalProbes(ctx, rows, systemRows) {
     ms: searchYoutube.ms
   });
 
+  const audioDownload = await timed(async () => {
+    const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'void-testall-music-'));
+    try {
+      const result = await downloadYoutubeAudio('Rick Astley Never Gonna Give You Up', folder, {
+        maxFilesize: '20M',
+        maxDuration: 600,
+        timeout: 180000
+      });
+      const bytes = fs.statSync(result.file).size;
+      if (bytes < 1000) throw new Error('Generated MP3 is unexpectedly empty.');
+      return `${result.strategy} produced ${Math.round(bytes / 1024)} KiB MP3`;
+    } finally {
+      fs.rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  systemRows.push({
+    name: 'YouTube real MP3 download',
+    status: audioDownload.ok ? 'PASS' : 'FAIL',
+    detail: audioDownload.detail,
+    ms: audioDownload.ms
+  });
+
   const ytOk = directYoutube.ok && searchYoutube.ok;
   const ytDetail = ytOk
-    ? 'shared yt-dlp URL + search backend passed live extraction'
-    : `yt-dlp backend failed: ${directYoutube.ok ? searchYoutube.detail : directYoutube.detail}`;
+    ? 'shared yt-dlp URL + search metadata extraction passed'
+    : `yt-dlp metadata backend failed: ${directYoutube.ok ? searchYoutube.detail : directYoutube.detail}`;
 
   for (const command of YOUTUBE_COMMANDS) {
     if (!rows.has(command)) continue;
@@ -322,6 +345,16 @@ async function externalProbes(ctx, rows, systemRows) {
       status: ytOk ? 'PASS' : 'FAIL',
       kind: 'shared YouTube backend',
       detail: ytDetail
+    });
+  }
+
+  for (const command of ['music', 'play', 'ytmp3', 'play2', 'playdoc', 'playch', 'spotify']) {
+    if (!rows.has(command)) continue;
+    rows.set(command, {
+      command,
+      status: audioDownload.ok ? 'PASS' : 'FAIL',
+      kind: 'real MP3 download path',
+      detail: audioDownload.detail
     });
   }
 

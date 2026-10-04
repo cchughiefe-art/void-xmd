@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { run } from '../utils.js';
+import { downloadYoutubeAudio, isYoutubeAudioInput } from '../youtube-audio.js';
 
 const requireText = (text, usage) => {
   const value = String(text || '').trim();
@@ -28,7 +29,38 @@ async function ytdlpInfo(input, format) {
   return { url, title, uploader };
 }
 
+async function sendYoutubeAudioFile({ input, sock, chat, raw, asDocument = false }) {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'void-yt-audio-'));
+  try {
+    const result = await downloadYoutubeAudio(input, folder, {
+      maxFilesize: '90M',
+      maxDuration: 1200,
+      timeout: 180000
+    });
+    const fileName = path.basename(result.file);
+    if (asDocument) {
+      return sock.sendMessage(chat, {
+        document: { url: result.file },
+        mimetype: 'audio/mpeg',
+        fileName
+      }, { quoted: raw });
+    }
+    return sock.sendMessage(chat, {
+      audio: { url: result.file },
+      mimetype: 'audio/mpeg',
+      fileName,
+      ptt: false
+    }, { quoted: raw });
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+}
+
 async function sendStream({ input, audio, sock, chat, raw, caption }) {
+  if (audio && isYoutubeAudioInput(input)) {
+    return sendYoutubeAudioFile({ input, sock, chat, raw });
+  }
+
   const format = audio
     ? 'bestaudio[ext=m4a]/bestaudio'
     : 'best[ext=mp4][height<=720]/best[height<=720]/best';
@@ -49,6 +81,10 @@ async function sendStream({ input, audio, sock, chat, raw, caption }) {
 }
 
 async function sendAsDocument({ input, audio, sock, chat, raw }) {
+  if (audio && isYoutubeAudioInput(input)) {
+    return sendYoutubeAudioFile({ input, sock, chat, raw, asDocument: true });
+  }
+
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'void-dl-'));
   try {
     const template = path.join(folder, '%(title).100B-%(id)s.%(ext)s');
@@ -151,13 +187,9 @@ export default [
     description: 'Search a song and include its channel/uploader',
     async run({ text, sock, chat, raw, reply }) {
       const input = requireText(text, 'Usage: .playch artist song');
-      const info = await ytdlpInfo(input, 'bestaudio[ext=m4a]/bestaudio');
+      const info = await ytdlpInfo(input, '18/b[acodec!=none]/b');
       await reply(`🎵 ${info.title}\nChannel: ${info.uploader || 'Unknown'}`);
-      await sock.sendMessage(chat, {
-        audio: { url: info.url },
-        mimetype: 'audio/mp4',
-        fileName: `${info.title}.m4a`
-      }, { quoted: raw });
+      await sendYoutubeAudioFile({ input, sock, chat, raw });
     }
   },
   {
