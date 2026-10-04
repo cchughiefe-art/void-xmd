@@ -2,28 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { run, refreshYtDlp, ytDlpAuthStatus } from '../utils.js';
-import { downloadYoutubeAudio, youtubeSource } from '../youtube-audio.js';
-
-async function probe(input) {
-  const started = Date.now();
-  try {
-    const out = await run('yt-dlp', [
-      '--simulate','--no-playlist','--no-warnings',
-      '--print','%(id)s | %(title)s', input
-    ], 120000);
-    return {
-      ok: true,
-      ms: Date.now() - started,
-      detail: String(out).split('\n')[0].slice(0, 240)
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      ms: Date.now() - started,
-      detail: String(error?.message || error).replace(/\s+/g,' ').slice(0, 700)
-    };
-  }
-}
+import { downloadYoutubeAudio, resolveYoutubeAudio } from '../youtube-audio.js';
 
 export default [
   {
@@ -31,7 +10,7 @@ export default [
     aliases: ['ytcookie','ytdlpstatus'],
     category: 'OWNER',
     ownerOnly: true,
-    description: 'Show yt-dlp channel/version and secure YouTube cookie status',
+    description: 'Show yt-dlp version and current YouTube/music backend',
 
     async run({ reply }) {
       const auth = ytDlpAuthStatus();
@@ -47,10 +26,9 @@ export default [
         `*YouTube / yt-dlp status*\n` +
         `Channel: ${auth.channel}\n` +
         `yt-dlp: ${version}\n` +
-        `Cookies: ${auth.present ? `YES (${auth.size} bytes)` : 'NO'}\n` +
-        `Cookie file: ${auth.cookieFile}\n` +
-        `Primary clients: ${process.env.YTDLP_YOUTUBE_PLAYER_CLIENTS || 'default,web_embedded'}\n` +
-        `Audio fallbacks: web_safari → visionos → android`
+        `Saved cookie file: ${auth.present ? `YES (${auth.size} bytes)` : 'NO'}\n` +
+        `Music backend: web_embedded + NO COOKIES\n` +
+        `Music flow: search → watch URL → bestaudio → MP3`
       );
     }
   },
@@ -74,67 +52,47 @@ export default [
     aliases: ['youtubecheck'],
     category: 'OWNER',
     ownerOnly: true,
-    description: 'Live-test YouTube metadata and a real MP3 download',
+    description: 'Test the exact no-cookie web_embedded music flow',
 
     async run({ reply }) {
-      await reply('Running YouTube metadata + real audio diagnostics…');
+      await reply('Testing exact Termux-style YouTube music flow…');
 
-      const direct = await probe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
-      const search = await probe('ytsearch1:Rick Astley Never Gonna Give You Up');
+      const started = Date.now();
+      let search;
+      try {
+        search = await resolveYoutubeAudio('Rick Astley Never Gonna Give You Up');
+      } catch (error) {
+        return reply(
+          `*YouTube diagnostic*\nFAIL Search: ${String(error?.message || error).slice(0, 1000)}`
+        );
+      }
 
-      const audioStarted = Date.now();
       const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'void-yttest-'));
-      let audio;
-
       try {
         const result = await downloadYoutubeAudio(
-          'Rick Astley Never Gonna Give You Up',
+          search.url,
           folder,
-          { maxFilesize: '20M', maxDuration: 600, timeout: 180000 }
+          { maxFilesize: '20M', timeout: 180000 }
         );
 
         const bytes = fs.statSync(result.file).size;
-        audio = {
-          ok: bytes > 1000,
-          ms: Date.now() - audioStarted,
-          detail: `${result.strategy} produced ${Math.round(bytes / 1024)} KiB MP3`
-        };
+
+        await reply(
+          `*YouTube diagnostic*\n` +
+          `PASS Search: ${search.id} | ${search.title}\n` +
+          `PASS Real MP3: ${Math.round(bytes / 1024)} KiB\n` +
+          `Strategy: ${result.strategy}\n` +
+          `Time: ${Date.now() - started}ms`
+        );
       } catch (error) {
-        audio = {
-          ok: false,
-          ms: Date.now() - audioStarted,
-          detail: String(error?.message || error).replace(/\s+/g,' ').slice(0, 1600)
-        };
+        await reply(
+          `*YouTube diagnostic*\n` +
+          `PASS Search: ${search.id} | ${search.title}\n` +
+          `FAIL Real MP3: ${String(error?.message || error).replace(/\s+/g,' ').slice(0, 1200)}`
+        );
       } finally {
         fs.rmSync(folder, { recursive: true, force: true });
       }
-
-      await reply(
-        `*YouTube diagnostic*\n` +
-        `${direct.ok ? 'PASS' : 'FAIL'} Direct metadata (${direct.ms}ms): ${direct.detail}\n` +
-        `${search.ok ? 'PASS' : 'FAIL'} Search metadata (${search.ms}ms): ${search.detail}\n` +
-        `${audio.ok ? 'PASS' : 'FAIL'} Real MP3 (${audio.ms}ms): ${audio.detail}`
-      );
-    }
-  },
-  {
-    name: 'ytformats',
-    aliases: ['ytformat'],
-    category: 'OWNER',
-    ownerOnly: true,
-    description: 'Show formats yt-dlp currently sees for a YouTube URL or search',
-
-    async run({ text, reply }) {
-      const input = String(text || '').trim();
-      if (!input) throw new Error('Usage: .ytformats <YouTube URL or search query>');
-
-      const out = await run(
-        'yt-dlp',
-        ['--no-playlist','--no-warnings','--list-formats', youtubeSource(input)],
-        120000
-      );
-
-      await reply(`*Available YouTube formats*\n${String(out).slice(-3400)}`);
     }
   }
 ];

@@ -1,9 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { run, sleep } from './utils.js';
+import { run } from './utils.js';
 
 const isUrl = value => /^https?:\/\//i.test(String(value || '').trim());
 const isYouTubeUrl = value => /(?:youtube\.com|youtu\.be|music\.youtube\.com)/i.test(String(value || ''));
+
+const BLOCKED_WORDS = [
+  'mixtape','mix tape','mega mix','megamix','dj mix','djset','dj set',
+  'continuous mix','non stop','nonstop','full mix','compilation','playlist',
+  'full album','album mix','greatest hits mix','best of mix','one hour mix',
+  '1 hour mix','2 hour mix','3 hour mix'
+];
+
+function blockedTitle(title = '') {
+  const text = String(title).toLowerCase();
+  return BLOCKED_WORDS.some(word => text.includes(word));
+}
 
 function clearFolder(folder) {
   for (const name of fs.readdirSync(folder)) {
@@ -17,45 +29,77 @@ function findMp3(folder) {
     .map(name => ({ name, full: path.join(folder, name) }))
     .filter(item => fs.statSync(item.full).isFile())
     .sort((a, b) => fs.statSync(b.full).mtimeMs - fs.statSync(a.full).mtimeMs);
-
   return files[0]?.full || '';
 }
 
-function commonArgs(folder, maxFilesize, maxDuration) {
+function baseNoCookieArgs() {
   return [
-    '--no-playlist',
-    '--no-warnings',
-    '--max-filesize', maxFilesize,
-    '--match-filter', `duration <= ${maxDuration}`,
-    '-x',
-    '--audio-format', 'mp3',
-    '--audio-quality', '192K',
-    '--embed-metadata',
-    '--restrict-filenames',
-    '-o', path.join(folder, '%(title).100B-%(id)s.%(ext)s')
+    '--no-cookies',
+    '--no-cookies-from-browser',
+    '--remote-components', 'ejs:github',
+    '--extractor-args', 'youtube:player_client=web_embedded'
   ];
 }
 
-function shortError(error, max = 420) {
-  const text = String(error?.message || error || 'unknown error')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return text.length <= max ? text : `${text.slice(0, max - 3)}...`;
+async function searchYoutube(query, count = 9, timeout = 120000) {
+  const output = await run('yt-dlp', [
+    ...baseNoCookieArgs(),
+    `ytsearch${Math.max(3, count)}:${query}`,
+    '--flat-playlist',
+    '--skip-download',
+    '--no-warnings',
+    '--print', '%(id)s\t%(title)s\t%(duration)s'
+  ], timeout);
+
+  const results = [];
+
+  for (const line of String(output || '').split(/\r?\n/)) {
+    const parts = line.split('\t');
+    if (parts.length < 3) continue;
+
+    const [id, rawTitle, rawDuration] = parts;
+    const title = String(rawTitle || '').trim();
+    const duration = Number(rawDuration);
+
+    if (!id || !title) continue;
+    if (blockedTitle(title)) continue;
+    if (!Number.isFinite(duration) || duration <= 0 || duration > 720) continue;
+
+    results.push({
+      id,
+      title,
+      duration,
+      url: `https://www.youtube.com/watch?v=${id}`
+    });
+
+    if (results.length >= 3) break;
+  }
+
+  if (!results.length) {
+    throw new Error('No suitable individual YouTube song result was found.');
+  }
+
+  return results;
 }
 
-async function tryStrategy({ name, args, source, folder, timeout }) {
-  clearFolder(folder);
+export async function resolveYoutubeAudio(input, options = {}) {
+  const value = String(input || '').trim();
+  if (!value) throw new Error('A YouTube URL or search query is required.');
 
-  try {
-    await run('yt-dlp', [...args, source], timeout);
-
-    const file = findMp3(folder);
-    if (!file) throw new Error('yt-dlp completed but produced no MP3.');
-
-    return { ok: true, file, strategy: name };
-  } catch (error) {
-    return { ok: false, error, strategy: name };
+  if (isUrl(value)) {
+    if (!isYouTubeUrl(value)) {
+      throw new Error('This helper only handles YouTube URLs or search queries.');
+    }
+    return { url: value, title: '', duration: 0, source: 'url' };
   }
+
+  const results = await searchYoutube(
+    value,
+    Number(options.searchCount || 9),
+    Number(options.searchTimeout || 120000)
+  );
+
+  return { ...results[0], source: 'search' };
 }
 
 export function youtubeSource(input) {
@@ -70,70 +114,55 @@ export function isYoutubeAudioInput(input) {
 }
 
 export async function downloadYoutubeAudio(input, folder, options = {}) {
-  const source = youtubeSource(input);
-  const maxFilesize = String(options.maxFilesize || '90M');
-  const maxDuration = Number(options.maxDuration || 1200);
+  clearFolder(folder);
+
+  const resolved = await resolveYoutubeAudio(input, options);
   const timeout = Number(options.timeout || 180000);
-  const base = commonArgs(folder, maxFilesize, maxDuration);
+  const concurrentFragments = String(options.concurrentFragments || 6);
+  const maxFilesize = String(options.maxFilesize || '90M');
 
-  const strategies = [
-    {
-      name: 'account-default',
-      args: [...base]
-    },
-    {
-      name: 'account-web-safari-hls',
-      args: [
-        ...base,
-        '--extractor-args', 'youtube:player_client=default,web_safari'
-      ],
-      retry: 2
-    },
-    {
-      name: 'anonymous-visionos',
-      args: [
-        ...base,
-        '--no-cookies',
-        '--no-cookies-from-browser',
-        '--extractor-args', 'youtube:player_client=visionos'
-      ]
-    },
-    {
-      name: 'anonymous-android',
-      args: [
-        ...base,
-        '--no-cookies',
-        '--no-cookies-from-browser',
-        '--extractor-args', 'youtube:player_client=android'
-      ]
-    }
-  ];
+  const archive = path.join(folder, '.music-dl-archive.txt');
+  const outputTemplate = path.join(folder, '%(title).100B-%(id)s.%(ext)s');
 
-  const failures = [];
+  // This intentionally mirrors the user's previously working Termux script:
+  // 1) search with web_embedded and no cookies
+  // 2) resolve a normal watch URL
+  // 3) download bestaudio m4a/bestaudio with web_embedded and no cookies
+  await run('yt-dlp', [
+    ...baseNoCookieArgs(),
+    resolved.url,
+    '--download-archive', archive,
+    '--no-playlist',
+    '--continue',
+    '--concurrent-fragments', concurrentFragments,
+    '--retries', '10',
+    '--fragment-retries', '10',
+    '--socket-timeout', '20',
+    '--no-overwrites',
+    '--ignore-errors',
+    '--max-filesize', maxFilesize,
+    '--embed-metadata',
+    '--restrict-filenames',
+    '-o', outputTemplate,
+    '-f', 'bestaudio[ext=m4a]/bestaudio',
+    '-x',
+    '--audio-format', 'mp3',
+    '--audio-quality', '192K'
+  ], timeout);
 
-  for (const strategy of strategies) {
-    const attempts = Number(strategy.retry || 1);
-
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-      const result = await tryStrategy({
-        ...strategy,
-        source,
-        folder,
-        timeout
-      });
-
-      if (result.ok) return result;
-
-      failures.push(
-        `${strategy.name}${attempts > 1 ? `#${attempt}` : ''}: ${shortError(result.error)}`
-      );
-
-      if (attempt < attempts) await sleep(1500);
-    }
+  const file = findMp3(folder);
+  if (!file) {
+    throw new Error(
+      `yt-dlp finished but no MP3 was produced for ${resolved.title || resolved.url}.`
+    );
   }
 
-  throw new Error(
-    'YouTube audio download failed after all automatic strategies.\n' +
-    failures.map((x, i) => `${i + 1}. ${x}`).join('\n')
-  );
+  return {
+    file,
+    strategy: 'termux-web-embedded-no-cookies',
+    videoId: resolved.id || '',
+    title: resolved.title || path.basename(file, path.extname(file)),
+    duration: resolved.duration || 0,
+    url: resolved.url
+  };
 }
