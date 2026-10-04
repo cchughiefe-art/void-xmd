@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { run } from '../utils.js';
-import { downloadYoutubeAudio, isYoutubeAudioInput } from '../youtube-audio.js';
+import { downloadYoutubeAudio, isYoutubeAudioInput, resolveYoutubeAudio } from '../youtube-audio.js';
 
 const requireText = (text, usage) => {
   const value = String(text || '').trim();
@@ -187,9 +187,9 @@ export default [
     description: 'Search a song and include its channel/uploader',
     async run({ text, sock, chat, raw, reply }) {
       const input = requireText(text, 'Usage: .playch artist song');
-      const info = await ytdlpInfo(input, '18/b[acodec!=none]/b');
-      await reply(`🎵 ${info.title}\nChannel: ${info.uploader || 'Unknown'}`);
-      await sendYoutubeAudioFile({ input, sock, chat, raw });
+      const info = await resolveYoutubeAudio(input, { maxDuration: 1200 });
+      await reply(`🎵 ${info.title || 'YouTube audio'}\nChannel: ${info.artist || 'Unknown'}`);
+      await sendYoutubeAudioFile({ input: info.url, sock, chat, raw });
     }
   },
   {

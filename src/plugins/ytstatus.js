@@ -2,20 +2,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { run, refreshYtDlp, ytDlpAuthStatus } from '../utils.js';
-import { downloadYoutubeAudio, resolveYoutubeAudio } from '../youtube-audio.js';
+import {
+  downloadYoutubeAudio,
+  nodeYoutubeEngineStatus,
+  resolveYoutubeAudio
+} from '../youtube-audio.js';
 
 export default [
   {
     name: 'ytstatus',
-    aliases: ['ytcookie','ytdlpstatus'],
+    aliases: ['ytcookie','ytdlpstatus','ytengine'],
     category: 'OWNER',
     ownerOnly: true,
-    description: 'Show yt-dlp version and current YouTube/music backend',
+    description: 'Show the current YouTube downloader engines',
 
     async run({ reply }) {
       const auth = ytDlpAuthStatus();
-      let version = 'unavailable';
+      const node = await nodeYoutubeEngineStatus();
 
+      let version = 'unavailable';
       try {
         version = String(await run('yt-dlp',['--version'],60000)).split('\n')[0].trim();
       } catch (error) {
@@ -23,12 +28,17 @@ export default [
       }
 
       await reply(
-        `*YouTube / yt-dlp status*\n` +
-        `Channel: ${auth.channel}\n` +
+        `*YouTube downloader status*\n` +
+        `Primary: Anita-style Node stream\n` +
+        `Node engine: ${node.available ? 'READY' : 'MISSING'}\n` +
+        `Node search: ${node.search ? 'READY' : 'MISSING'}\n` +
+        `Node HTTP proxy fallback: ${process.env.OUTBOUND_PROXY_HTTP ? 'CONFIGURED' : 'NO'}\n` +
+        `Secondary: yt-dlp\n` +
+        `yt-dlp channel: ${auth.channel}\n` +
         `yt-dlp: ${version}\n` +
-        `Saved cookie file: ${auth.present ? `YES (${auth.size} bytes)` : 'NO'}\n` +
-        `Music backend: web_embedded + NO COOKIES\n` +
-        `Music flow: search → watch URL → bestaudio → MP3`
+        `yt-dlp proxy fallback: ${process.env.OUTBOUND_PROXY_SOCKS5 || process.env.OUTBOUND_PROXY_HTTP ? 'CONFIGURED' : 'NO'}\n` +
+        `Saved cookies: ${auth.present ? 'present but not required by the music engine' : 'not used'}\n\n` +
+        `Order: Node direct → Node HTTP proxy → yt-dlp direct → yt-dlp SOCKS5 → yt-dlp HTTP`
       );
     }
   },
@@ -37,14 +47,14 @@ export default [
     aliases: ['ytdlpupdate'],
     category: 'OWNER',
     ownerOnly: true,
-    description: 'Refresh the official yt-dlp build for the configured channel',
+    description: 'Refresh the yt-dlp fallback engine',
 
     async run({ reply }) {
       const auth = ytDlpAuthStatus();
-      await reply(`Refreshing yt-dlp ${auth.channel}…`);
+      await reply(`Refreshing yt-dlp ${auth.channel} fallback…`);
       await refreshYtDlp();
       const version = String(await run('yt-dlp',['--version'],60000)).split('\n')[0].trim();
-      await reply(`yt-dlp refreshed: ${version}`);
+      await reply(`yt-dlp fallback refreshed: ${version}`);
     }
   },
   {
@@ -52,43 +62,51 @@ export default [
     aliases: ['youtubecheck'],
     category: 'OWNER',
     ownerOnly: true,
-    description: 'Test the exact no-cookie web_embedded music flow',
+    description: 'Test the exact primary + fallback music path',
 
     async run({ reply }) {
-      await reply('Testing exact Termux-style YouTube music flow…');
+      await reply('Testing Anita-style Node stream + yt-dlp fallback…');
 
       const started = Date.now();
+      const node = await nodeYoutubeEngineStatus();
       let search;
+
       try {
         search = await resolveYoutubeAudio('Rick Astley Never Gonna Give You Up');
       } catch (error) {
         return reply(
-          `*YouTube diagnostic*\nFAIL Search: ${String(error?.message || error).slice(0, 1000)}`
+          `*YouTube diagnostic*\n` +
+          `Node engine: ${node.available ? 'READY' : 'MISSING'}\n` +
+          `FAIL Search: ${String(error?.message || error).slice(0, 1500)}`
         );
       }
 
       const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'void-yttest-'));
+
       try {
         const result = await downloadYoutubeAudio(
           search.url,
           folder,
-          { maxFilesize: '20M', timeout: 180000 }
+          { maxFilesize: '20M', maxFilesizeBytes: 20 * 1024 * 1024, timeout: 180000 }
         );
 
         const bytes = fs.statSync(result.file).size;
 
         await reply(
           `*YouTube diagnostic*\n` +
-          `PASS Search: ${search.id} | ${search.title}\n` +
+          `Node engine: ${node.available ? 'READY' : 'MISSING'}\n` +
+          `PASS Search: ${search.title || search.url}\n` +
+          `Search engine: ${search.searchEngine}\n` +
           `PASS Real MP3: ${Math.round(bytes / 1024)} KiB\n` +
-          `Strategy: ${result.strategy}\n` +
+          `Download strategy: ${result.strategy}\n` +
           `Time: ${Date.now() - started}ms`
         );
       } catch (error) {
         await reply(
           `*YouTube diagnostic*\n` +
-          `PASS Search: ${search.id} | ${search.title}\n` +
-          `FAIL Real MP3: ${String(error?.message || error).replace(/\s+/g,' ').slice(0, 1200)}`
+          `Node engine: ${node.available ? 'READY' : 'MISSING'}\n` +
+          `PASS Search: ${search.title || search.url}\n` +
+          `FAIL Real MP3: ${String(error?.message || error).replace(/\s+/g,' ').slice(0, 2200)}`
         );
       } finally {
         fs.rmSync(folder, { recursive: true, force: true });
