@@ -22,6 +22,19 @@ loadStore();
 await loadPlugins();
 startWebServer();
 
+// Install optional YouTube Node downloader dependencies on the server itself.
+// This runs in the background so WhatsApp startup is not blocked.
+import('./youtube-audio.js')
+  .then(module => module.ensureYoutubeNodeDependencies())
+  .then(result => {
+    if (result?.installedNow) {
+      console.log('YouTube Node downloader dependencies installed on server.');
+    }
+  })
+  .catch(error => {
+    console.error('YouTube Node downloader dependency bootstrap failed:', error.message);
+  });
+
 async function connectWhatsApp() {
   try {
     await startBot();

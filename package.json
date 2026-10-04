@@ -15,7 +15,9 @@
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "7.0.0-rc14",
-    "pino": "^9.7.0"
+    "pino": "^9.7.0",
+    "@distube/ytdl-core": "4.16.12",
+    "yt-search": "2.13.1"
   },
   "allowScripts": {
     "@whiskeysockets/baileys@7.0.0-rc14": true

@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { run } from './utils.js';
+
+const require = createRequire(import.meta.url);
 
 const isUrl = value => /^https?:\/\//i.test(String(value || '').trim());
 const isYouTubeUrl = value => /(?:youtube\.com|youtu\.be|music\.youtube\.com)/i.test(String(value || ''));
@@ -14,6 +17,7 @@ const BLOCKED_WORDS = [
 ];
 
 let nodeDepsPromise;
+let installPromise;
 
 function blockedTitle(title = '') {
   const text = String(title).toLowerCase();
@@ -42,19 +46,104 @@ function shortError(error, max = 500) {
   return text.length <= max ? text : `${text.slice(0, max - 3)}...`;
 }
 
-async function loadNodeDeps() {
-  nodeDepsPromise ||= Promise.all([
-    import('@distube/ytdl-core'),
-    import('yt-search')
-  ]).then(([ytdlModule, ytSearchModule]) => ({
-    ytdl: ytdlModule.default || ytdlModule,
-    ytSearch: ytSearchModule.default || ytSearchModule
-  })).catch(error => {
-    nodeDepsPromise = null;
-    throw new Error(
-      `Anita-style Node engine dependencies are unavailable: ${error.message}. ` +
-      'Run npm install @distube/ytdl-core@4.16.12 yt-search@2.13.1'
+function depsInstalled() {
+  try {
+    require.resolve('@distube/ytdl-core/package.json');
+    require.resolve('yt-search/package.json');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runNpmInstall(timeout = 240000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'npm',
+      [
+        'install',
+        '--omit=dev',
+        '--no-audit',
+        '--no-fund',
+        '--no-progress',
+        '@distube/ytdl-core@4.16.12',
+        'yt-search@2.13.1'
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, npm_config_update_notifier: 'false' },
+        stdio: ['ignore', 'pipe', 'pipe']
+      }
     );
+
+    let out = '';
+    let err = '';
+    let settled = false;
+
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish(reject, new Error('Server dependency installation timed out.'));
+    }, timeout);
+
+    child.stdout.on('data', b => out += b);
+    child.stderr.on('data', b => err += b);
+
+    child.once('error', error => finish(reject, error));
+    child.once('close', code => {
+      if (code === 0) return finish(resolve, out.trim());
+      finish(
+        reject,
+        new Error(
+          err.slice(-2000) ||
+          out.slice(-2000) ||
+          `npm install exited with code ${code}`
+        )
+      );
+    });
+  });
+}
+
+export async function ensureYoutubeNodeDependencies() {
+  if (depsInstalled()) {
+    return { installed: true, installedNow: false };
+  }
+
+  installPromise ||= runNpmInstall().finally(() => {
+    installPromise = null;
+  });
+
+  await installPromise;
+
+  if (!depsInstalled()) {
+    throw new Error('npm finished but the Node YouTube dependencies are still unavailable.');
+  }
+
+  return { installed: true, installedNow: true };
+}
+
+async function loadNodeDeps() {
+  nodeDepsPromise ||= (async () => {
+    await ensureYoutubeNodeDependencies();
+
+    const [ytdlModule, ytSearchModule] = await Promise.all([
+      import('@distube/ytdl-core'),
+      import('yt-search')
+    ]);
+
+    return {
+      ytdl: ytdlModule.default || ytdlModule,
+      ytSearch: ytSearchModule.default || ytSearchModule
+    };
+  })().catch(error => {
+    nodeDepsPromise = null;
+    throw error;
   });
 
   return nodeDepsPromise;
@@ -62,14 +151,22 @@ async function loadNodeDeps() {
 
 export async function nodeYoutubeEngineStatus() {
   try {
+    const installedBefore = depsInstalled();
     const { ytdl, ytSearch } = await loadNodeDeps();
+
     return {
       available: typeof ytdl === 'function' && typeof ytSearch === 'function',
       ytdl: typeof ytdl === 'function',
-      search: typeof ytSearch === 'function'
+      search: typeof ytSearch === 'function',
+      installedBefore
     };
   } catch (error) {
-    return { available: false, ytdl: false, search: false, error: error.message };
+    return {
+      available: false,
+      ytdl: false,
+      search: false,
+      error: error.message
+    };
   }
 }
 
@@ -98,14 +195,17 @@ async function nodeSearch(query, options = {}) {
   const usable = videos.filter(video => {
     const title = String(video?.title || '').trim();
     const seconds = Number(video?.seconds || video?.duration?.seconds || 0);
+
     if (!video?.videoId || !title || blockedTitle(title)) return false;
     if (seconds && (seconds < 20 || seconds > maxDuration)) return false;
+
     return true;
   });
 
   if (!usable.length) throw new Error('Node YouTube search returned no suitable song result.');
 
   const video = usable[0];
+
   return {
     id: video.videoId,
     title: video.title,
@@ -167,7 +267,10 @@ export async function resolveYoutubeAudio(input, options = {}) {
   if (!value) throw new Error('A YouTube URL or search query is required.');
 
   if (isUrl(value)) {
-    if (!isYouTubeUrl(value)) throw new Error('This helper only handles YouTube URLs or search queries.');
+    if (!isYouTubeUrl(value)) {
+      throw new Error('This helper only handles YouTube URLs or search queries.');
+    }
+
     return {
       id: '',
       title: '',
@@ -216,6 +319,7 @@ function runFfmpegFromStream(stream, output, metadata = {}, timeout = 180000) {
     args.push(output);
 
     const ffmpeg = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'] });
+
     let stderr = '';
     let settled = false;
 
@@ -249,9 +353,11 @@ function runFfmpegFromStream(stream, output, metadata = {}, timeout = 180000) {
       if (code !== 0) {
         return finish(reject, new Error(stderr.trim() || `ffmpeg exited ${code}`));
       }
+
       if (!fs.existsSync(output) || fs.statSync(output).size < 1024) {
         return finish(reject, new Error('ffmpeg produced no usable MP3.'));
       }
+
       finish(resolve, output);
     });
 
@@ -266,24 +372,30 @@ async function nodeDownload(resolved, folder, options = {}) {
   const failures = [];
 
   for (const route of candidateProxyRoutes(ytdl)) {
-    const output = path.join(folder, `${safeName(resolved.title || resolved.id || 'youtube-audio')}.mp3`);
+    const output = path.join(
+      folder,
+      `${safeName(resolved.title || resolved.id || 'youtube-audio')}.mp3`
+    );
 
     try {
       const info = await ytdl.getInfo(resolved.url, {
-        agent: route.agent,
-        playerClients: ['WEB_EMBEDDED', 'IOS', 'ANDROID', 'TV']
+        agent: route.agent
       });
 
       const details = info?.videoDetails || {};
       const title = resolved.title || details.title || 'YouTube audio';
-      const artist = resolved.artist || details.author?.name || details.ownerChannelName || '';
+      const artist =
+        resolved.artist ||
+        details.author?.name ||
+        details.ownerChannelName ||
+        '';
 
       const formats = Array.isArray(info?.formats) ? info.formats : [];
-      const audioCandidates = formats.filter(f =>
-        f &&
-        f.hasAudio &&
-        !f.hasVideo &&
-        (!f.contentLength || Number(f.contentLength) <= maxFilesizeBytes)
+      const audioCandidates = formats.filter(format =>
+        format &&
+        format.hasAudio &&
+        !format.hasVideo &&
+        (!format.contentLength || Number(format.contentLength) <= maxFilesizeBytes)
       );
 
       if (!audioCandidates.length) {
@@ -379,6 +491,7 @@ export function isYoutubeAudioInput(input) {
 
 export async function downloadYoutubeAudio(input, folder, options = {}) {
   clearFolder(folder);
+
   const resolved = await resolveYoutubeAudio(input, options);
   const failures = [];
 

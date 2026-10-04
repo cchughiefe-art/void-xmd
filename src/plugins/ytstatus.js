@@ -32,12 +32,13 @@ export default [
         `Primary: Anita-style Node stream\n` +
         `Node engine: ${node.available ? 'READY' : 'MISSING'}\n` +
         `Node search: ${node.search ? 'READY' : 'MISSING'}\n` +
+        `Dependencies: ${node.available ? 'installed on server' : 'server install failed'}\n` +
         `Node HTTP proxy fallback: ${process.env.OUTBOUND_PROXY_HTTP ? 'CONFIGURED' : 'NO'}\n` +
         `Secondary: yt-dlp\n` +
         `yt-dlp channel: ${auth.channel}\n` +
         `yt-dlp: ${version}\n` +
         `yt-dlp proxy fallback: ${process.env.OUTBOUND_PROXY_SOCKS5 || process.env.OUTBOUND_PROXY_HTTP ? 'CONFIGURED' : 'NO'}\n` +
-        `Saved cookies: ${auth.present ? 'present but not required by the music engine' : 'not used'}\n\n` +
+        `Saved cookies: ${auth.present ? 'present but not required by the primary engine' : 'not used'}\n\n` +
         `Order: Node direct → Node HTTP proxy → yt-dlp direct → yt-dlp SOCKS5 → yt-dlp HTTP`
       );
     }
@@ -69,14 +70,21 @@ export default [
 
       const started = Date.now();
       const node = await nodeYoutubeEngineStatus();
-      let search;
 
+      if (!node.available) {
+        return reply(
+          `*YouTube diagnostic*\n` +
+          `FAIL Node engine: ${String(node.error || 'dependency installation failed').slice(0, 1600)}`
+        );
+      }
+
+      let search;
       try {
         search = await resolveYoutubeAudio('Rick Astley Never Gonna Give You Up');
       } catch (error) {
         return reply(
           `*YouTube diagnostic*\n` +
-          `Node engine: ${node.available ? 'READY' : 'MISSING'}\n` +
+          `Node engine: READY\n` +
           `FAIL Search: ${String(error?.message || error).slice(0, 1500)}`
         );
       }
@@ -87,14 +95,18 @@ export default [
         const result = await downloadYoutubeAudio(
           search.url,
           folder,
-          { maxFilesize: '20M', maxFilesizeBytes: 20 * 1024 * 1024, timeout: 180000 }
+          {
+            maxFilesize: '20M',
+            maxFilesizeBytes: 20 * 1024 * 1024,
+            timeout: 180000
+          }
         );
 
         const bytes = fs.statSync(result.file).size;
 
         await reply(
           `*YouTube diagnostic*\n` +
-          `Node engine: ${node.available ? 'READY' : 'MISSING'}\n` +
+          `Node engine: READY\n` +
           `PASS Search: ${search.title || search.url}\n` +
           `Search engine: ${search.searchEngine}\n` +
           `PASS Real MP3: ${Math.round(bytes / 1024)} KiB\n` +
@@ -104,7 +116,7 @@ export default [
       } catch (error) {
         await reply(
           `*YouTube diagnostic*\n` +
-          `Node engine: ${node.available ? 'READY' : 'MISSING'}\n` +
+          `Node engine: READY\n` +
           `PASS Search: ${search.title || search.url}\n` +
           `FAIL Real MP3: ${String(error?.message || error).replace(/\s+/g,' ').slice(0, 2200)}`
         );
