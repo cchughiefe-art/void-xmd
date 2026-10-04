@@ -8,6 +8,9 @@ try {
   }
 }
 
+const { installNetworkFallback } = await import('./network.js');
+installNetworkFallback();
+
 const { config, validateConfig } = await import('./config.js');
 const { startBot } = await import('./bot.js');
 const { loadStore } = await import('./store.js');

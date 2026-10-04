@@ -259,6 +259,40 @@ function ytDlpFriendlyError(error) {
   return error instanceof Error ? error : new Error(message);
 }
 
+function ytdlpProxyFallbacks() {
+  if (/^(?:0|false|off|no)$/i.test(String(process.env.OUTBOUND_PROXY_FALLBACK || '1'))) return [];
+  return [
+    String(process.env.OUTBOUND_PROXY_SOCKS5 || '').trim(),
+    String(process.env.OUTBOUND_PROXY_HTTP || '').trim()
+  ].filter(Boolean);
+}
+
+function redactProxy(value) {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = '***';
+      url.password = '***';
+    }
+    return url.toString();
+  } catch {
+    return '<invalid proxy>';
+  }
+}
+
+function withProxy(args, proxy) {
+  const clean = [];
+  for (let i = 0; i < args.length; i++) {
+    if (String(args[i]) === '--proxy') {
+      i += 1;
+      continue;
+    }
+    if (String(args[i]).startsWith('--proxy=')) continue;
+    clean.push(args[i]);
+  }
+  return ['--proxy', proxy, ...clean];
+}
+
 export async function run(bin, args, timeout = 120000) {
   if (bin !== 'yt-dlp') return spawnRun(bin, args, timeout);
 
@@ -269,40 +303,49 @@ export async function run(bin, args, timeout = 120000) {
     local = 'yt-dlp';
   }
 
-  const youtube = isYouTubeInvocation(args);
-  const auth = ytDlpAuthStatus();
   const prepared = prepareYtDlpArgs(args, { useCookies: true });
+  const explicitProxy = hasArg(args, '--proxy');
 
   try {
     return await spawnRun(local, prepared, timeout);
-  } catch (error) {
-    const message = String(error?.message || '');
+  } catch (directError) {
+    if (explicitProxy) throw ytDlpFriendlyError(directError);
 
-    if (
-      local !== 'yt-dlp' &&
-      (error?.code === 'ENOENT' || /ENOENT|not found/i.test(message))
-    ) {
+    const failures = [`direct: ${String(directError?.message || directError).replace(/\s+/g, ' ').slice(-500)}`];
+
+    for (const proxy of ytdlpProxyFallbacks()) {
       try {
-        return await spawnRun('yt-dlp', prepared, timeout);
-      } catch (fallbackError) {
-        error = fallbackError;
+        let proxyArgs = withProxy(prepared, proxy);
+
+        // Never auto-forward the bot's managed YouTube cookie file through a
+        // fallback proxy. Commands that explicitly supplied their own cookie
+        // arguments are left untouched.
+        if (
+          isYouTubeInvocation(args) &&
+          !hasArg(args, '--cookies') &&
+          !hasArg(args, '--cookies-from-browser')
+        ) {
+          proxyArgs = proxyArgs.filter((value, index, array) => {
+            if (value === '--cookies') return false;
+            if (index > 0 && array[index - 1] === '--cookies') return false;
+            return true;
+          });
+          if (!hasArg(proxyArgs, '--no-cookies')) {
+            proxyArgs.unshift('--no-cookies', '--no-cookies-from-browser');
+          }
+        }
+
+        return await spawnRun(local, proxyArgs, timeout);
+      } catch (error) {
+        failures.push(
+          `${redactProxy(proxy)}: ${String(error?.message || error).replace(/\s+/g, ' ').slice(-500)}`
+        );
       }
     }
 
-    if (
-      youtube &&
-      auth.present &&
-      !hasArg(args, '--cookies') &&
-      !hasArg(args, '--cookies-from-browser') &&
-      /the page needs to be reloaded/i.test(String(error?.message || error))
-    ) {
-      try {
-        const anonymous = prepareYtDlpArgs(args, { useCookies: false });
-        return await spawnRun(local, anonymous, timeout);
-      } catch {}
-    }
-
-    throw ytDlpFriendlyError(error);
+    throw new Error(
+      `yt-dlp failed on direct and all configured fallback routes.\n${failures.join('\n')}`
+    );
   }
 }
 
