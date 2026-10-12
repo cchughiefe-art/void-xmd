@@ -223,23 +223,47 @@ export const store = {
     return state.business.sessions[id];
   },
 
-  setBusinessChatPaused(sessionId = 'primary', chatKey, paused = true) {
+  setBusinessChatPaused(sessionId = 'primary', chatKey, paused = true, reason = 'manual-command') {
     const key = String(chatKey || '').trim();
     if (!key) throw new Error('A customer number is required.');
 
     const current = this.getBusiness(sessionId);
     const pausedChats = { ...(current.pausedChats || {}) };
 
-    if (paused) pausedChats[key] = Date.now();
-    else delete pausedChats[key];
+    if (paused) {
+      pausedChats[key] = {
+        at: Date.now(),
+        reason: String(reason || 'manual-command')
+      };
+    } else {
+      delete pausedChats[key];
+    }
 
     return this.updateBusiness(sessionId, { pausedChats });
   },
 
-  isBusinessChatPaused(sessionId = 'primary', chatKey) {
+  getBusinessChatPause(sessionId = 'primary', chatKey) {
     const key = String(chatKey || '').trim();
-    if (!key) return false;
-    return Boolean(this.getBusiness(sessionId).pausedChats?.[key]);
+    if (!key) return null;
+
+    const value = this.getBusiness(sessionId).pausedChats?.[key];
+    if (!value) return null;
+
+    if (typeof value === 'object') {
+      return {
+        at: Number(value.at || 0),
+        reason: String(value.reason || 'legacy')
+      };
+    }
+
+    return {
+      at: Number(value || 0),
+      reason: 'legacy'
+    };
+  },
+
+  isBusinessChatPaused(sessionId = 'primary', chatKey) {
+    return Boolean(this.getBusinessChatPause(sessionId, chatKey));
   },
 
   getApiKey(name) {

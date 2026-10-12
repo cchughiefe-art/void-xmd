@@ -18,6 +18,12 @@ const customerFrom = value => {
   return digits;
 };
 
+const pauseReasonOf = value => {
+  if (!value) return '';
+  if (typeof value === 'object') return String(value.reason || 'legacy');
+  return 'legacy';
+};
+
 const setText = (name, field, usage, description) => ({
   name,
   category: 'AI ASSISTANT',
@@ -88,6 +94,9 @@ export default [
         `Business info: ${b.info ? `${b.info.length} characters saved` : 'not set'}`,
         `Rules: ${b.rules ? `${b.rules.length} characters saved` : 'not set'}`,
         `Paused chats: ${Object.keys(b.pausedChats || {}).length}`,
+        `AI handoffs waiting: ${Object.values(b.pausedChats || {}).filter(value => pauseReasonOf(value) === 'handoff').length}`,
+        `Human takeover chats: ${Object.values(b.pausedChats || {}).filter(value => pauseReasonOf(value) === 'human').length}`,
+        `Manually hard-paused: ${Object.values(b.pausedChats || {}).filter(value => ['manual-command','legacy'].includes(pauseReasonOf(value))).length}`,
         `Active in-memory chats: ${businessMemoryCount(sid)}`,
         '',
         'These settings belong only to this linked WhatsApp account.'
@@ -167,7 +176,11 @@ export default [
         '• Mixed language → naturally mixed reply.',
         '• Casual conversation stays casual.',
         '• Business questions use the saved business information and rules.',
-        '• If you manually reply to a customer from this WhatsApp account, AI pauses automatically for that customer.',
+        '• If you manually reply, AI enters human-takeover mode for that customer.',
+        '• When that customer replies again, you have 60 seconds to answer.',
+        '• If you do not answer within 60 seconds, AI resumes automatically.',
+        '• Every new customer message resets the 60-second window.',
+        '• AI handoff and .pauseai are hard pauses, not automatic 60-second resumes.',
         '',
         '*Take over / return to AI*',
         '.pauseai CUSTOMER_NUMBER',
@@ -205,8 +218,8 @@ export default [
     async run(ctx) {
       const sid = sessionIdOf(ctx);
       const customer = customerFrom(ctx.args[0]);
-      store.setBusinessChatPaused(sid, customer, true);
-      await ctx.reply(`AI paused for ${customer} on session ${sid}.`);
+      store.setBusinessChatPaused(sid, customer, true, 'manual-command');
+      await ctx.reply(`AI HARD-paused for ${customer} on session ${sid}. It will not auto-resume until .resumeai is used.`);
     }
   },
   {

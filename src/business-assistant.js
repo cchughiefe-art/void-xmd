@@ -6,10 +6,12 @@ import { jidNumber } from './utils.js';
 const histories = new Map();
 const queues = new Map();
 const aiOutgoing = new Set();
+const humanTakeoverTimers = new Map();
 
 const MAX_HISTORY_MESSAGES = 16;
 const MAX_HISTORY_CHATS = 250;
 const AI_OUTGOING_TTL_MS = 60000;
+const HUMAN_TAKEOVER_GRACE_MS = 60000;
 
 const sidOf = value => String(value || 'primary');
 const customerOf = value => jidNumber(value) || String(value || '');
@@ -71,6 +73,9 @@ function assistantPrompt(settings) {
     '- Chat normally when the person is chatting normally.',
     '- You may answer general questions, explain things, joke lightly, help with ideas and have ordinary conversation.',
     '- Match the user’s language and level of formality naturally.',
+    '- If the user speaks English, reply naturally in English.',
+    '- If the user speaks Nigerian Pidgin/broken English, reply naturally in Nigerian Pidgin.',
+    '- If the user mixes English and Pidgin, mix them naturally too.',
     '- Avoid sounding robotic, overly formal, repetitive or like a customer-service script when the conversation is casual.',
     '- Keep WhatsApp replies reasonably short unless the user clearly asks for detail.',
     '',
@@ -121,15 +126,136 @@ function ignoredChat(chat) {
   return !value || value === 'status@broadcast' || value.endsWith('@broadcast') || value.endsWith('@newsletter');
 }
 
+function clearHumanTimer(sessionId, customer) {
+  const key = historyKey(sessionId, customer);
+  const pending = humanTakeoverTimers.get(key);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  humanTakeoverTimers.delete(key);
+}
+
+async function sendHandoffNotice(sock, sid, customer, message) {
+  const sessionOwnerNumber = jidNumber(sock.user?.id);
+  const recipients = new Set();
+  if (sessionOwnerNumber) recipients.add(`${sessionOwnerNumber}@s.whatsapp.net`);
+  if (config.owner) recipients.add(`${config.owner}@s.whatsapp.net`);
+
+  const text =
+    `🚨 *AI HANDOFF REQUIRED*\n\n` +
+    `Session: ${sid}\n` +
+    `Customer: ${customer}\n` +
+    `Chat: https://wa.me/${customer}\n` +
+    `Last message: ${message.slice(0, 1000)}\n\n` +
+    `AI has HARD-PAUSED this customer because human attention is required.\n` +
+    `Open the customer chat and reply manually.\n\n` +
+    `After your manual reply, normal human-takeover mode begins. When the customer messages again, you have 60 seconds to respond. If you do not respond within 60 seconds, AI resumes automatically.\n\n` +
+    `Force AI back immediately: .resumeai ${customer}`;
+
+  for (const jid of recipients) {
+    const sent = await sock.sendMessage(jid, { text }).catch(() => null);
+    markAiOutgoing(sent);
+  }
+}
+
+async function respondWithAi({ sock, raw, chat, message, sid, customer, settings, addUser = true }) {
+  const startedAt = Date.now();
+  if (addUser) addHistory(sid, chat, 'user', message);
+
+  const prompt = [
+    'Conversation so far:',
+    transcript(sid, chat),
+    '',
+    'Respond to the latest user message naturally.',
+    'Decide from context whether this is normal conversation or business conversation.',
+    'Do not mention that you are switching modes.'
+  ].join('\n');
+
+  let answer = '';
+  try {
+    await sock.sendPresenceUpdate('composing', chat).catch(() => {});
+    answer = await askAi(prompt, {
+      system: assistantPrompt(settings),
+      temperature: 0.65,
+      maxTokens: 650,
+      timeout: 35000
+    });
+  } catch (error) {
+    console.error(`[hybrid-ai:${sid}:${customer}]`, error.message);
+    answer = 'I’m having trouble replying properly right now. A human can get back to you shortly.';
+  } finally {
+    await sock.sendPresenceUpdate('paused', chat).catch(() => {});
+  }
+
+  // Do not talk over a human who replied while the model was generating.
+  const pauseNow = store.getBusinessChatPause(sid, customer);
+  if (pauseNow && Number(pauseNow.at || 0) >= startedAt) return false;
+
+  const handoff = answer.includes('[[HANDOFF]]');
+  answer = answer.replace(/\[\[HANDOFF\]\]/g, '').trim() || 'A human will get back to you shortly.';
+
+  const sent = await sock.sendMessage(chat, { text: answer }, { quoted: raw });
+  markAiOutgoing(sent);
+  addHistory(sid, chat, 'assistant', answer);
+
+  if (handoff) {
+    clearHumanTimer(sid, customer);
+    store.setBusinessChatPaused(sid, customer, true, 'handoff');
+    await sendHandoffNotice(sock, sid, customer, message);
+  }
+
+  return true;
+}
+
+function scheduleHumanResume({ sock, raw, chat, message, sid, customer }) {
+  const key = historyKey(sid, customer);
+  clearHumanTimer(sid, customer);
+
+  const timer = setTimeout(async () => {
+    humanTakeoverTimers.delete(key);
+
+    try {
+      const pause = store.getBusinessChatPause(sid, customer);
+      if (!pause || pause.reason !== 'human') return;
+
+      const settings = store.getBusiness(sid);
+      if (!settings.enabled) return;
+      if (store.getSessionSetting(sid, 'mode', config.mode) === 'private') return;
+
+      const ai = getAiSettings({ required: false });
+      if (!ai.key) return;
+
+      store.setBusinessChatPaused(sid, customer, false);
+
+      await enqueue(key, async () => {
+        await respondWithAi({
+          sock, raw, chat, message, sid, customer, settings, addUser: false
+        });
+      });
+    } catch (error) {
+      console.error(`[hybrid-ai-grace:${sid}:${customer}]`, error.message);
+    }
+  }, HUMAN_TAKEOVER_GRACE_MS);
+
+  timer.unref?.();
+  humanTakeoverTimers.set(key, { timer, at: Date.now() });
+}
+
 export function clearBusinessMemory(sessionId, customer = '') {
   const sid = sidOf(sessionId);
   if (customer) {
+    clearHumanTimer(sid, customer);
     histories.delete(historyKey(sid, customer));
     return 1;
   }
+
   let removed = 0;
   for (const key of [...histories.keys()]) {
     if (key.startsWith(`${sid}::`)) {
+      const pending = humanTakeoverTimers.get(key);
+      if (pending) {
+        clearTimeout(pending.timer);
+        humanTakeoverTimers.delete(key);
+      }
       histories.delete(key);
       removed += 1;
     }
@@ -152,14 +278,23 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
   const settings = store.getBusiness(sid);
   if (!settings.enabled) return false;
 
-  // Manual owner reply = human takeover. Bot-generated outgoing messages are marked
-  // so the assistant never pauses itself.
+  // Real human reply = soft takeover. Explicit .pauseai stays hard-paused.
   if (raw?.key?.fromMe) {
     if (isAiOutgoing(raw)) return false;
+
     if (message && !message.startsWith(config.prefix)) {
       const customer = customerOf(chat);
       if (customer && customer !== config.owner) {
-        store.setBusinessChatPaused(sid, customer, true);
+        clearHumanTimer(sid, customer);
+        const current = store.getBusinessChatPause(sid, customer);
+        const keepHard = current?.reason === 'manual-command';
+
+        store.setBusinessChatPaused(
+          sid,
+          customer,
+          true,
+          keepHard ? 'manual-command' : 'human'
+        );
         addHistory(sid, chat, 'assistant', message);
       }
     }
@@ -169,7 +304,19 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
   if (!message || message.startsWith(config.prefix) || isOwnerChat(raw, sender)) return false;
 
   const customer = customerOf(chat);
-  if (store.isBusinessChatPaused(sid, customer)) return false;
+  const pause = store.getBusinessChatPause(sid, customer);
+
+  if (pause) {
+    if (pause.reason === 'human') {
+      addHistory(sid, chat, 'user', message);
+      scheduleHumanResume({ sock, raw, chat, message, sid, customer });
+      return true;
+    }
+
+    // AI handoff, explicit .pauseai, and legacy pauses remain hard.
+    return false;
+  }
+
   if (store.getSessionSetting(sid, 'mode', config.mode) === 'private') return false;
 
   const ai = getAiSettings({ required: false });
@@ -179,52 +326,9 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
   }
 
   await enqueue(historyKey(sid, chat), async () => {
-    addHistory(sid, chat, 'user', message);
-
-    const prompt = [
-      'Conversation so far:',
-      transcript(sid, chat),
-      '',
-      'Respond to the latest user message naturally.',
-      'Decide from context whether this is normal conversation or business conversation.',
-      'Do not mention that you are switching modes.'
-    ].join('\n');
-
-    let answer = '';
-    try {
-      await sock.sendPresenceUpdate('composing', chat).catch(() => {});
-      answer = await askAi(prompt, {
-        system: assistantPrompt(settings),
-        temperature: 0.65,
-        maxTokens: 650,
-        timeout: 35000
-      });
-    } catch (error) {
-      console.error(`[hybrid-ai:${sid}:${customer}]`, error.message);
-      answer = 'I’m having trouble replying properly right now. A human can get back to you shortly.';
-    } finally {
-      await sock.sendPresenceUpdate('paused', chat).catch(() => {});
-    }
-
-    const handoff = answer.includes('[[HANDOFF]]');
-    answer = answer.replace(/\[\[HANDOFF\]\]/g, '').trim() || 'A human will get back to you shortly.';
-
-    const sent = await sock.sendMessage(chat, { text: answer }, { quoted: raw });
-    markAiOutgoing(sent);
-    addHistory(sid, chat, 'assistant', answer);
-
-    if (handoff) {
-      store.setBusinessChatPaused(sid, customer, true);
-      const notice = await sock.sendMessage(`${config.owner}@s.whatsapp.net`, {
-        text:
-          `*AI handoff*\n` +
-          `Session: ${sid}\n` +
-          `Customer: ${customer}\n` +
-          `Last message: ${message.slice(0, 1000)}\n\n` +
-          `AI is paused for this customer. Use .resumeai ${customer} on this bot account when you want it to continue.`
-      }).catch(() => null);
-      markAiOutgoing(notice);
-    }
+    await respondWithAi({
+      sock, raw, chat, message, sid, customer, settings, addUser: true
+    });
   });
 
   return true;
