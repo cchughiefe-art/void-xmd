@@ -22,6 +22,7 @@ import {
   handleStatusAutomation,
   rememberMessage
 } from './automation.js';
+import { handleBusinessMessage } from './business-assistant.js';
 
 const originalConsoleInfo = console.info.bind(console);
 console.info = (...args) => {
@@ -445,6 +446,18 @@ function attachCommonEvents(record, sock) {
 
         const moderated = await handleMessageAutomation({ sock, raw, chat, sender, body, isGroup, isAdmin, isBotAdmin, metadata, contextInfo });
         if (moderated) continue;
+
+        const businessHandled = await handleBusinessMessage({
+          sock,
+          raw,
+          chat,
+          sender,
+          body,
+          isGroup,
+          sessionId
+        });
+        if (businessHandled) continue;
+
         if (!body.startsWith(config.prefix)) continue;
 
         const [head, ...args] = body.slice(config.prefix.length).trim().split(/\s+/);

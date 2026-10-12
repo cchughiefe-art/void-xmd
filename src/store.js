@@ -7,6 +7,7 @@ const defaults = {
   groups: {},
   economy: {},
   global: {},
+  business: { sessions: {} },
   secrets: { apiKeys: {}, currentKey: '' }
 };
 
@@ -14,6 +15,18 @@ const dbFile = path.join(config.dataDir, 'void-xmd.json');
 let state = structuredClone(defaults);
 let delayedSaveTimer = null;
 let dirty = false;
+
+const businessDefaults = () => ({
+  enabled: false,
+  name: '',
+  info: '',
+  rules: '',
+  hours: '',
+  location: '',
+  personality: 'friendly, natural, concise and human',
+  tone: 'friendly, professional and concise',
+  pausedChats: {}
+});
 
 const groupDefaults = () => ({
   welcome: false,
@@ -53,6 +66,9 @@ export function loadStore() {
       groups: parsed.groups || {},
       economy: parsed.economy || {},
       global: parsed.global || {},
+      business: {
+        sessions: parsed.business?.sessions || {}
+      },
       secrets: {
         apiKeys: parsed.secrets?.apiKeys || {},
         currentKey: parsed.secrets?.currentKey || ''
@@ -123,6 +139,59 @@ export const store = {
     state.global[key] = value;
     saveNow();
     return value;
+  },
+
+  getBusiness(sessionId = 'primary') {
+    const id = String(sessionId || 'primary');
+    state.business ||= { sessions: {} };
+    state.business.sessions ||= {};
+
+    const current = state.business.sessions[id] || {};
+    state.business.sessions[id] = {
+      ...businessDefaults(),
+      ...current,
+      pausedChats: {
+        ...businessDefaults().pausedChats,
+        ...(current.pausedChats || {})
+      }
+    };
+
+    return state.business.sessions[id];
+  },
+
+  updateBusiness(sessionId = 'primary', patch = {}) {
+    const id = String(sessionId || 'primary');
+    const current = this.getBusiness(id);
+
+    state.business.sessions[id] = {
+      ...current,
+      ...patch,
+      pausedChats: patch.pausedChats
+        ? { ...patch.pausedChats }
+        : { ...(current.pausedChats || {}) }
+    };
+
+    saveNow();
+    return state.business.sessions[id];
+  },
+
+  setBusinessChatPaused(sessionId = 'primary', chatKey, paused = true) {
+    const key = String(chatKey || '').trim();
+    if (!key) throw new Error('A customer number is required.');
+
+    const current = this.getBusiness(sessionId);
+    const pausedChats = { ...(current.pausedChats || {}) };
+
+    if (paused) pausedChats[key] = Date.now();
+    else delete pausedChats[key];
+
+    return this.updateBusiness(sessionId, { pausedChats });
+  },
+
+  isBusinessChatPaused(sessionId = 'primary', chatKey) {
+    const key = String(chatKey || '').trim();
+    if (!key) return false;
+    return Boolean(this.getBusiness(sessionId).pausedChats?.[key]);
   },
 
   getApiKey(name) {
