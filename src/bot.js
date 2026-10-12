@@ -410,15 +410,18 @@ function attachCommonEvents(record, sock) {
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-
     for (const raw of messages) {
       try {
         if (!raw.message) continue;
+
+        // Status messages are not guaranteed to use a normal notify upsert
+        // on every linked account/client state, so process them first.
         if (raw.key.remoteJid === 'status@broadcast') {
           await handleStatusAutomation(sock, raw);
           continue;
         }
+
+        if (type !== 'notify') continue;
 
         rememberMessage(raw);
         const body = bodyOf(raw).trim();
