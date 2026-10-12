@@ -17,11 +17,11 @@ const customerFrom = value => {
   return digits;
 };
 
-const setText = (name, field, usage) => ({
+const setText = (name, field, usage, description) => ({
   name,
-  category: 'BUSINESS AI',
+  category: 'AI ASSISTANT',
   ownerOnly: true,
-  description: `Set this WhatsApp session's ${field} for the business AI`,
+  description,
   async run(ctx) {
     const value = String(ctx.text || '').trim();
     if (!value) throw new Error(`Usage: ${usage}`);
@@ -34,55 +34,60 @@ const setText = (name, field, usage) => ({
 export default [
   {
     name: 'businessai',
-    category: 'BUSINESS AI',
+    aliases: ['chatai','assistantai'],
+    category: 'AI ASSISTANT',
     ownerOnly: true,
-    description: 'Turn the private-chat AI business assistant on or off for only this WhatsApp session',
+    description: 'Turn hybrid normal-chat + business AI on or off for this WhatsApp session',
     async run(ctx) {
       if (!ctx.args[0]) throw new Error('Usage: .businessai on|off');
       const enabled = onOff(ctx.args[0]);
       if (enabled) getAiSettings();
       const sid = sessionIdOf(ctx);
       store.updateBusiness(sid, { enabled });
-      await ctx.reply(`Business AI: ${enabled ? 'ON' : 'OFF'}\nSession: ${sid}\nThis does not affect your other linked WhatsApp sessions.`);
+      await ctx.reply(`Hybrid AI assistant: ${enabled ? 'ON' : 'OFF'}\nSession: ${sid}\nNormal chat + business chat are enabled together.\nYour other WhatsApp sessions are unaffected.`);
     }
   },
   {
     name: 'businessstatus',
-    category: 'BUSINESS AI',
+    aliases: ['aichatstatus'],
+    category: 'AI ASSISTANT',
     ownerOnly: true,
-    description: 'Show isolated business AI settings for the current WhatsApp session',
+    description: 'Show this WhatsApp session’s isolated AI assistant settings',
     async run(ctx) {
       const sid = sessionIdOf(ctx);
       const b = store.getBusiness(sid);
       const account = jidNumber(ctx.sock?.user?.id) || 'unknown';
       await ctx.reply([
-        '*Business AI status*',
+        '*Hybrid AI assistant status*',
         `Account: ${account}`,
         `Session: ${sid}`,
         `Enabled: ${b.enabled ? 'YES' : 'NO'}`,
         `Business: ${b.name || 'not set'}`,
         `Location: ${b.location || 'not set'}`,
         `Hours: ${b.hours || 'not set'}`,
-        `Tone: ${b.tone || 'not set'}`,
+        `Personality: ${b.personality || 'friendly, natural and concise'}`,
+        `Business tone: ${b.tone || 'friendly, professional and concise'}`,
         `Business info: ${b.info ? `${b.info.length} characters saved` : 'not set'}`,
         `Rules: ${b.rules ? `${b.rules.length} characters saved` : 'not set'}`,
-        `Paused customers: ${Object.keys(b.pausedChats || {}).length}`,
-        `In-memory customer histories: ${businessMemoryCount(sid)}`,
+        `Paused chats: ${Object.keys(b.pausedChats || {}).length}`,
+        `Active in-memory chats: ${businessMemoryCount(sid)}`,
         '',
-        'Settings and chat memory are isolated by WhatsApp session.'
+        'Normal chats, business settings and customer histories are isolated by WhatsApp session.'
       ].join('\n'));
     }
   },
   {
     name: 'businesshelp',
-    category: 'BUSINESS AI',
+    aliases: ['chathelp'],
+    category: 'AI ASSISTANT',
     ownerOnly: true,
-    description: 'Show business AI setup commands',
+    description: 'Show hybrid AI assistant setup commands',
     async run(ctx) {
       await ctx.reply([
-        '*Business AI commands*',
+        '*Hybrid AI assistant commands*',
         '.businessai on|off',
         '.businessstatus',
+        '.setaipersonality TEXT',
         '.setbusinessname NAME',
         '.setbusinessinfo DETAILS',
         '.setbusinessrules RULES',
@@ -93,52 +98,55 @@ export default [
         '.resumeai CUSTOMER_NUMBER',
         '.clearbusinessmemory [CUSTOMER_NUMBER]',
         '',
-        'Run setup on each linked bot account separately.'
+        'Normal conversation and business conversation are handled automatically.',
+        'Configure each linked WhatsApp account separately.'
       ].join('\n'));
     }
   },
-  setText('setbusinessname', 'name', '.setbusinessname Bright Accessories'),
-  setText('setbusinessinfo', 'info', '.setbusinessinfo Describe products, prices, delivery and payment rules here'),
-  setText('setbusinessrules', 'rules', '.setbusinessrules Add the instructions the assistant must follow'),
-  setText('setbusinesshours', 'hours', '.setbusinesshours Monday-Saturday 8AM-7PM'),
-  setText('setbusinesslocation', 'location', '.setbusinesslocation Your business location'),
-  setText('setbusinesstone', 'tone', '.setbusinesstone friendly, human, concise'),
+  setText('setaipersonality','personality','.setaipersonality Friendly, casual Nigerian tone. Speak naturally and do not sound robotic.','Set the normal-chat personality for this WhatsApp session'),
+  setText('setbusinessname','name','.setbusinessname Bright Accessories','Set the business name for this WhatsApp session'),
+  setText('setbusinessinfo','info','.setbusinessinfo Describe products, prices, delivery and payment rules here','Set the business knowledge for this WhatsApp session'),
+  setText('setbusinessrules','rules','.setbusinessrules Add the business instructions the assistant must follow','Set business rules for this WhatsApp session'),
+  setText('setbusinesshours','hours','.setbusinesshours Monday-Saturday 8AM-7PM','Set business hours for this WhatsApp session'),
+  setText('setbusinesslocation','location','.setbusinesslocation Your business location','Set business location for this WhatsApp session'),
+  setText('setbusinesstone','tone','.setbusinesstone friendly, human, concise','Set the business-response tone for this WhatsApp session'),
   {
     name: 'pauseai',
-    category: 'BUSINESS AI',
+    category: 'AI ASSISTANT',
     ownerOnly: true,
-    description: 'Pause AI replies to one customer on this WhatsApp session',
+    description: 'Pause AI replies to one person on this WhatsApp session',
     async run(ctx) {
       const sid = sessionIdOf(ctx);
       const customer = customerFrom(ctx.args[0]);
       store.setBusinessChatPaused(sid, customer, true);
-      await ctx.reply(`Business AI paused for ${customer} on session ${sid}.`);
+      await ctx.reply(`AI paused for ${customer} on session ${sid}.`);
     }
   },
   {
     name: 'resumeai',
-    category: 'BUSINESS AI',
+    category: 'AI ASSISTANT',
     ownerOnly: true,
-    description: 'Resume AI replies to one customer on this WhatsApp session',
+    description: 'Resume AI replies to one person on this WhatsApp session',
     async run(ctx) {
       const sid = sessionIdOf(ctx);
       const customer = customerFrom(ctx.args[0]);
       store.setBusinessChatPaused(sid, customer, false);
-      await ctx.reply(`Business AI resumed for ${customer} on session ${sid}.`);
+      await ctx.reply(`AI resumed for ${customer} on session ${sid}.`);
     }
   },
   {
     name: 'clearbusinessmemory',
-    category: 'BUSINESS AI',
+    aliases: ['clearchatmemory'],
+    category: 'AI ASSISTANT',
     ownerOnly: true,
-    description: 'Clear temporary AI conversation history for one customer or this session',
+    description: 'Clear temporary AI conversation memory for one person or this entire session',
     async run(ctx) {
       const sid = sessionIdOf(ctx);
       const customer = ctx.args[0] ? customerFrom(ctx.args[0]) : '';
       const removed = clearBusinessMemory(sid, customer);
       await ctx.reply(customer
-        ? `Cleared business AI memory for ${customer} on session ${sid}.`
-        : `Cleared ${removed} business AI histories from session ${sid}.`);
+        ? `Cleared AI conversation memory for ${customer} on session ${sid}.`
+        : `Cleared ${removed} AI conversation histories from session ${sid}.`);
     }
   }
 ];
