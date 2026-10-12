@@ -16,6 +16,45 @@ const HUMAN_TAKEOVER_GRACE_MS = 60000;
 const sidOf = value => String(value || 'primary');
 const customerOf = value => jidNumber(value) || String(value || '');
 const historyKey = (sessionId, chat) => `${sidOf(sessionId)}::${customerOf(chat)}`;
+const phoneByConversation = new Map();
+
+function isPhoneJid(value) {
+  return /@(?:s\\.whatsapp\\.net|c\\.us)$/i.test(String(value || ''));
+}
+
+function validPhoneDigits(value) {
+  const digits = String(value || '').replace(/\\D/g, '');
+  return /^\\d{8,15}$/.test(digits) ? digits : '';
+}
+
+function rememberConversationPhone(raw, chat, sender = '') {
+  const conversationKey = String(chat || raw?.key?.remoteJid || '');
+  const candidates = [
+    raw?.key?.remoteJidAlt,
+    raw?.key?.participantAlt,
+    sender,
+    raw?.key?.remoteJid,
+    raw?.key?.participant
+  ].filter(Boolean);
+
+  let phone = '';
+  for (const candidate of candidates) {
+    if (!isPhoneJid(candidate)) continue;
+    const digits = validPhoneDigits(jidNumber(candidate));
+    if (digits) {
+      phone = digits;
+      break;
+    }
+  }
+
+  if (phone && conversationKey) phoneByConversation.set(conversationKey, phone);
+  if (!phone && conversationKey) phone = phoneByConversation.get(conversationKey) || '';
+  return phone;
+}
+
+function customerKey(raw, chat, sender = '') {
+  return rememberConversationPhone(raw, chat, sender) || customerOf(chat);
+}
 
 function getHistory(sessionId, chat) {
   const key = historyKey(sessionId, chat);
@@ -134,22 +173,39 @@ function clearHumanTimer(sessionId, customer) {
   humanTakeoverTimers.delete(key);
 }
 
-async function sendHandoffNotice(sock, sid, customer, message) {
+async function sendHandoffNotice(sock, sid, customer, chat, raw, message) {
   const sessionOwnerNumber = jidNumber(sock.user?.id);
   const recipients = new Set();
   if (sessionOwnerNumber) recipients.add(`${sessionOwnerNumber}@s.whatsapp.net`);
   if (config.owner) recipients.add(`${config.owner}@s.whatsapp.net`);
 
+  const resolvedPhone =
+    rememberConversationPhone(raw, chat, customer) ||
+    (isPhoneJid(chat) ? validPhoneDigits(jidNumber(chat)) : '');
+
+  const displayName = String(raw?.pushName || 'Customer').trim() || 'Customer';
+  const conversationId = customerOf(chat);
+
+  const customerLine = resolvedPhone
+    ? `Customer: ${displayName} (+${resolvedPhone})`
+    : `Customer: ${displayName}`;
+
+  const chatLine = resolvedPhone
+    ? `Open chat: https://wa.me/${resolvedPhone}`
+    : `Open the customer from your recent WhatsApp chats. Internal WhatsApp ID: ${conversationId}`;
+
+  const resumeTarget = resolvedPhone || customer;
+
   const text =
     `🚨 *AI HANDOFF REQUIRED*\n\n` +
     `Session: ${sid}\n` +
-    `Customer: ${customer}\n` +
-    `Chat: https://wa.me/${customer}\n` +
+    `${customerLine}\n` +
+    `${chatLine}\n` +
     `Last message: ${message.slice(0, 1000)}\n\n` +
     `AI has HARD-PAUSED this customer because human attention is required.\n` +
     `Open the customer chat and reply manually.\n\n` +
     `After your manual reply, normal human-takeover mode begins. When the customer messages again, you have 60 seconds to respond. If you do not respond within 60 seconds, AI resumes automatically.\n\n` +
-    `Force AI back immediately: .resumeai ${customer}`;
+    `Force AI back immediately: .resumeai ${resumeTarget}`;
 
   for (const jid of recipients) {
     const sent = await sock.sendMessage(jid, { text }).catch(() => null);
@@ -200,7 +256,7 @@ async function respondWithAi({ sock, raw, chat, message, sid, customer, settings
   if (handoff) {
     clearHumanTimer(sid, customer);
     store.setBusinessChatPaused(sid, customer, true, 'handoff');
-    await sendHandoffNotice(sock, sid, customer, message);
+    await sendHandoffNotice(sock, sid, customer, chat, raw, message);
   }
 
   return true;
@@ -283,7 +339,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
     if (isAiOutgoing(raw)) return false;
 
     if (message && !message.startsWith(config.prefix)) {
-      const customer = customerOf(chat);
+      const customer = customerKey(raw, chat, sender);
       if (customer && customer !== config.owner) {
         clearHumanTimer(sid, customer);
         const current = store.getBusinessChatPause(sid, customer);
@@ -303,7 +359,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
 
   if (!message || message.startsWith(config.prefix) || isOwnerChat(raw, sender)) return false;
 
-  const customer = customerOf(chat);
+  const customer = customerKey(raw, chat, sender);
   const pause = store.getBusinessChatPause(sid, customer);
 
   if (pause) {
