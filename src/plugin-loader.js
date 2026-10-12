@@ -49,6 +49,7 @@ export function pluginDetails() {
     category: plugin.category || 'PLUGINS',
     description: plugin.description || 'Loaded modular VOID XMD command.',
     ownerOnly: Boolean(plugin.ownerOnly),
+    sessionOwnerOnly: Boolean(plugin.sessionOwnerOnly),
     groupOnly: Boolean(plugin.groupOnly),
     adminOnly: Boolean(plugin.adminOnly)
   }));
@@ -57,12 +58,16 @@ export function pluginDetails() {
 export async function executePlugin(ctx) {
   const plugin = registry.get(ctx.command);
   if (!plugin) return false;
-  if (plugin.ownerOnly && !ctx.isOwner) throw new Error('Owner only.');
+  if (plugin.ownerOnly && !ctx.isOwner) throw new Error('Main VOID XMD owner only.');
+  if (plugin.sessionOwnerOnly && !ctx.isOwner && !ctx.isSessionOwner) {
+    throw new Error('This command can only be used by the owner of this linked WhatsApp account.');
+  }
   if (plugin.groupOnly && !ctx.isGroup) throw new Error('This command only works in groups.');
   if (plugin.adminOnly && !ctx.isAdmin && !ctx.isOwner) throw new Error('Group admin only.');
   const runContext=plugin._generated?{
     reply:ctx.reply,args:ctx.args,text:ctx.text,pushName:ctx.pushName,sender:ctx.sender,chat:ctx.chat,metadata:ctx.metadata,
-    isOwner:ctx.isOwner,isGroup:ctx.isGroup,isAdmin:ctx.isAdmin,isBotAdmin:ctx.isBotAdmin,
+    isOwner:ctx.isOwner,isSessionOwner:ctx.isSessionOwner,sessionId:ctx.sessionId,
+    isGroup:ctx.isGroup,isAdmin:ctx.isAdmin,isBotAdmin:ctx.isBotAdmin,
     config:{name:config.name,prefix:config.prefix,mode:config.mode,timezone:config.timezone}
   }:ctx;
   if(plugin._generated){

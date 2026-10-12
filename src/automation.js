@@ -143,8 +143,8 @@ export async function handleDeletedMessages(sock, event) {
   }
 }
 
-export async function handleCalls(sock, calls = []) {
-  if (!store.getGlobal('anticall', false)) return;
+export async function handleCalls(sock, calls = [], sessionId = 'primary') {
+  if (!store.getSessionSetting(sessionId, 'anticall', false)) return;
 
   for (const call of calls) {
     if (call?.status !== 'offer' || !call.id || !call.from) continue;
@@ -177,14 +177,14 @@ async function removeMessage(sock, chat, raw, notice) {
   if (notice) await sock.sendMessage(chat, { text: notice }).catch(() => {});
 }
 
-export async function handleStatusAutomation(sock, raw) {
+export async function handleStatusAutomation(sock, raw, sessionId = 'primary') {
   if (raw.key.remoteJid !== 'status@broadcast') return false;
 
-  if (store.getGlobal('autoviewstatus', false) || store.getGlobal('autostatus', false)) {
+  if (store.getSessionSetting(sessionId, 'autoviewstatus', false)) {
     await sock.readMessages([raw.key]).catch(() => {});
   }
 
-  if (store.getGlobal('autostatusreact', false) && raw.key.participant) {
+  if (store.getSessionSetting(sessionId, 'autostatusreact', false) && raw.key.participant) {
     await sock.sendMessage('status@broadcast', {
       react: { text: '❤️', key: raw.key }
     }).catch(() => {});
@@ -322,14 +322,14 @@ export async function handleMessageAutomation(ctx) {
   return false;
 }
 
-export function applyConnectionAutomation(sock) {
+export function applyConnectionAutomation(sock, sessionId = 'primary') {
   let timer;
 
   const refresh = async () => {
-    if (store.getGlobal('alwaysonline', false)) {
+    if (store.getSessionSetting(sessionId, 'alwaysonline', false)) {
       await sock.sendPresenceUpdate('available').catch(() => {});
     }
-    if (store.getGlobal('autobio', false)) {
+    if (store.getSessionSetting(sessionId, 'autobio', false)) {
       const text = `${config.name} • online • ${new Date().toLocaleString('en-NG', { timeZone: config.timezone })}`;
       await sock.updateProfileStatus(text.slice(0, 139)).catch(() => {});
     }

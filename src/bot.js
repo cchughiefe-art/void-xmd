@@ -386,7 +386,7 @@ function attachCommonEvents(record, sock) {
   const sessionId = record.id;
 
   sock.ev.on('call', calls => {
-    handleCalls(sock, calls).catch(error => logger.error({ err: error, session: sessionId }, 'Call automation failed'));
+    handleCalls(sock, calls, sessionId).catch(error => logger.error({ err: error, session: sessionId }, 'Call automation failed'));
   });
 
   sock.ev.on('messages.delete', event => {
@@ -418,7 +418,7 @@ function attachCommonEvents(record, sock) {
         // Status messages are not guaranteed to use a normal notify upsert
         // on every linked account/client state, so process them first.
         if (raw.key.remoteJid === 'status@broadcast') {
-          await handleStatusAutomation(sock, raw);
+          await handleStatusAutomation(sock, raw, sessionId);
           continue;
         }
 
@@ -444,7 +444,7 @@ function attachCommonEvents(record, sock) {
         const messageContent = raw.message?.[messageType];
         const contextInfo = messageContent?.contextInfo || raw.message?.extendedTextMessage?.contextInfo || raw.message?.imageMessage?.contextInfo || raw.message?.videoMessage?.contextInfo || raw.message?.documentMessage?.contextInfo || {};
 
-        const moderated = await handleMessageAutomation({ sock, raw, chat, sender, body, isGroup, isAdmin, isBotAdmin, metadata, contextInfo });
+        const moderated = await handleMessageAutomation({ sock, raw, chat, sender, body, isGroup, isAdmin, isBotAdmin, metadata, contextInfo, sessionId });
         if (moderated) continue;
 
         const businessHandled = await handleBusinessMessage({
@@ -475,7 +475,9 @@ function attachCommonEvents(record, sock) {
         }
 
         const isOwner = jidNumber(sender) === config.owner || (raw.key.fromMe && jidNumber(sock.user?.id) === config.owner);
-        if (store.getGlobal('mode', config.mode) === 'private' && !isOwner) continue;
+        const isSessionOwner = Boolean(raw.key.fromMe);
+        const sessionMode = store.getSessionSetting(sessionId, 'mode', config.mode);
+        if (sessionMode === 'private' && !isOwner && !isSessionOwner) continue;
 
         const reply = (message, mentions = []) => sock.sendMessage(chat, { text: String(message), mentions }, { quoted: raw });
         const quoted = contextInfo.quotedMessage ? { participant: contextInfo.participant, message: contextInfo.quotedMessage, stanzaId: contextInfo.stanzaId } : null;
@@ -488,7 +490,7 @@ function attachCommonEvents(record, sock) {
         };
 
         await execute({
-          command, args, text, reply, sock, chat, sender, isOwner, isGroup, isAdmin, isBotAdmin, metadata,
+          command, args, text, reply, sock, chat, sender, isOwner, isSessionOwner, isGroup, isAdmin, isBotAdmin, metadata,
           mentions: contextInfo.mentionedJid || [], quoted, downloadMedia, raw, pushName: raw.pushName || 'User',
           timestamp: Number(raw.messageTimestamp) * 1000 || Date.now(), sessionId,
           deviceManager: { add: addDevice, list: listDevices, remove: removeDevice, max: maxSessions }
@@ -562,7 +564,7 @@ async function connectSession(record) {
       record.resolvePairingReady = null;
       record.phone = record.phone || jidNumber(sock.user?.id);
       try { record.stopConnectionAutomation?.(); } catch {}
-      record.stopConnectionAutomation = applyConnectionAutomation(sock);
+      record.stopConnectionAutomation = applyConnectionAutomation(sock, record.id);
       logger.info({ jid: sock.user?.id, session: record.id }, `${config.name} connected`);
     }
 

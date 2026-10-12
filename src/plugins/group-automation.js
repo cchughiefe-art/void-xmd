@@ -26,16 +26,16 @@ const groupToggle = (name, key = name) => ({
   }
 });
 
-const globalToggle = name => ({
+const accountToggle = name => ({
   name,
   category: 'AUTOMATION',
-  ownerOnly: true,
-  description: `Toggle account-wide ${name}`,
-  async run({ args, reply }) {
+  sessionOwnerOnly: true,
+  description: `Toggle ${name} for only this linked WhatsApp account`,
+  async run({ args, reply, sessionId }) {
     if (!args[0]) throw new Error(`Usage: .${name} on|off`);
     const enabled = onOff(args[0]);
-    store.setGlobal(name, enabled);
-    await reply(`${name}: ${enabled ? 'ON' : 'OFF'}`);
+    store.setSessionSetting(sessionId || 'primary', name, enabled);
+    await reply(`${name}: ${enabled ? 'ON' : 'OFF'} on this WhatsApp account only`);
   }
 });
 
@@ -58,7 +58,7 @@ export default [
     name: 'leavegc',
     category: 'GROUP',
     groupOnly: true,
-    ownerOnly: true,
+    sessionOwnerOnly: true,
     description: 'Make the bot leave the current group',
     async run({ reply, sock, chat }) {
       await reply('Leaving this group.');
@@ -68,7 +68,7 @@ export default [
   {
     name: 'join',
     category: 'GROUP',
-    ownerOnly: true,
+    sessionOwnerOnly: true,
     description: 'Join a group from an invite link or code',
     async run({ text, reply, sock }) {
       const code = String(text || '').match(/chat\.whatsapp\.com\/([A-Za-z0-9]+)/i)?.[1] ||
@@ -189,7 +189,7 @@ export default [
   {
     name: 'creategc',
     category: 'GROUP',
-    ownerOnly: true,
+    sessionOwnerOnly: true,
     description: 'Create a group: .creategc Name | number1 number2',
     async run({ text, reply, sock }) {
       const [subjectRaw, membersRaw = ''] = String(text || '').split('|');
@@ -221,7 +221,7 @@ export default [
     name: 'demoteall',
     category: 'GROUP',
     groupOnly: true,
-    ownerOnly: true,
+    sessionOwnerOnly: true,
     description: 'Demote all admins except the bot/group owner',
     async run({ sock, chat, metadata, reply, isBotAdmin }) {
       if (!isBotAdmin) throw new Error('Make the bot a group admin first.');
@@ -241,7 +241,7 @@ export default [
     name: 'kickall',
     category: 'GROUP',
     groupOnly: true,
-    ownerOnly: true,
+    sessionOwnerOnly: true,
     description: 'Remove all non-admin members (requires CONFIRM)',
     async run({ args, sock, chat, metadata, reply, isBotAdmin }) {
       if (String(args[0] || '').toUpperCase() !== 'CONFIRM') {
@@ -335,9 +335,9 @@ export default [
   groupToggle('autoread'),
   groupToggle('autoreact'),
   groupToggle('chatbot'),
-  globalToggle('anticall'),
-  { ...globalToggle('autoviewstatus'), aliases: ['autostatus'] },
-  globalToggle('autostatusreact'),
-  globalToggle('autobio'),
-  globalToggle('alwaysonline')
+  accountToggle('anticall'),
+  { ...accountToggle('autoviewstatus'), aliases: ['autostatus'] },
+  accountToggle('autostatusreact'),
+  accountToggle('autobio'),
+  accountToggle('alwaysonline')
 ];

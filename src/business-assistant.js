@@ -170,7 +170,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
 
   const customer = customerOf(chat);
   if (store.isBusinessChatPaused(sid, customer)) return false;
-  if (store.getGlobal('mode', config.mode) === 'private') return false;
+  if (store.getSessionSetting(sid, 'mode', config.mode) === 'private') return false;
 
   const ai = getAiSettings({ required: false });
   if (!ai.key) {

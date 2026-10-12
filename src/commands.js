@@ -14,7 +14,7 @@ const onOff = value => {
   if (['off','false','0','disable','disabled'].includes(normalized)) return false;
   throw new Error('Use on or off.');
 };
-const effectiveMode = () => store.getGlobal('mode', config.mode);
+const effectiveMode = (sessionId = 'primary') => store.getSessionSetting(sessionId, 'mode', config.mode);
 const pick = items => items[Math.floor(Math.random() * items.length)];
 
 async function ai(prompt) {
@@ -22,7 +22,7 @@ async function ai(prompt) {
 }
 
 export async function execute(ctx) {
-  const { command, args, text, reply, sock, chat, sender, isOwner, isGroup, isAdmin, isBotAdmin, quoted } = ctx;
+  const { command, args, text, reply, sock, chat, sender, isOwner, isSessionOwner, isGroup, isAdmin, isBotAdmin, quoted } = ctx;
   const need = value => { if (!value) throw new Error('Add the required text after the command.'); return value; };
   const adminOnly = () => { if (!isGroup || (!isAdmin && !isOwner)) throw new Error('This command is for group admins.'); };
   const botAdmin = () => { adminOnly(); if (!isBotAdmin) throw new Error('Make the bot a group admin first.'); };
@@ -69,13 +69,13 @@ export async function execute(ctx) {
   }
   if (command === 'ping') return reply(`🏓 Pong: ${Date.now() - ctx.timestamp}ms`);
   if (command === 'runtime') return reply(`⏱️ ${formatRuntime(process.uptime())}`);
-  if (command === 'botinfo') return reply(`*${config.name}*\nMode: ${effectiveMode()}\nNode: ${process.version}\nPlatform: ${os.platform()} ${os.arch()}\nUptime: ${formatRuntime(process.uptime())}`);
+  if (command === 'botinfo') return reply(`*${config.name}*\nMode: ${effectiveMode(ctx.sessionId)}\nSession: ${ctx.sessionId || 'primary'}\nNode: ${process.version}\nPlatform: ${os.platform()} ${os.arch()}\nUptime: ${formatRuntime(process.uptime())}`);
   if (command === 'owner') return reply(`Owner: wa.me/${config.owner}`);
   if (command === 'repo') return reply('VOID XMD\nhttps://github.com/cchughiefe-art/void-xmd');
   if (['public','private'].includes(command)) {
-    if (!isOwner) throw new Error('Owner only.');
-    store.setGlobal('mode', command);
-    return reply(`Bot mode switched to ${command.toUpperCase()} immediately and saved persistently.`);
+    if (!isOwner && !isSessionOwner) throw new Error('This command is for the owner of this linked WhatsApp account.');
+    store.setSessionSetting(ctx.sessionId || 'primary', 'mode', command);
+    return reply(`This WhatsApp account is now ${command.toUpperCase()} mode. Other linked sessions are unchanged.`);
   }
   if (command === 'health') return reply('💚 Bot process and WhatsApp connection are active.');
   if (command === 'stats') { const s = store.stats(); return reply(`Users: ${s.users}\nGroups: ${s.groups}\nMemory: ${Math.round(process.memoryUsage().rss/1048576)} MB`); }
@@ -206,7 +206,7 @@ export async function execute(ctx) {
   }
   if (command === 'pay') { if (!target || !Number.isFinite(Number(args.at(-1)))) throw new Error('Mention someone and add an amount.'); const amount=Math.max(1,Math.floor(Number(args.at(-1)))); if(store.balance(sender)<amount) throw new Error('Insufficient balance.'); store.addCoins(sender,-amount); store.addCoins(target,amount); return reply(`Transferred ${amount} coins.`); }
 
-  if (command === 'block' || command === 'unblock') { if (!isOwner) throw new Error('Owner only.'); if (!target) throw new Error('Mention or reply to a user.'); await sock.updateBlockStatus(target, command === 'block'?'block':'unblock'); return reply('Done.'); }
+  if (command === 'block' || command === 'unblock') { if (!isOwner && !isSessionOwner) throw new Error('This command is for the owner of this linked WhatsApp account.'); if (!target) throw new Error('Mention or reply to a user.'); await sock.updateBlockStatus(target, command === 'block'?'block':'unblock'); return reply('Done.'); }
   if (command === 'restart') { if (!isOwner) throw new Error('Owner only.'); await reply('Restarting…'); setTimeout(()=>process.exit(0),500); return; }
   throw new Error(`Unknown command. Use ${config.prefix}menu`);
 }

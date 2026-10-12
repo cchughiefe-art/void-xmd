@@ -86,8 +86,8 @@ const builtin = {
   balance: 'Show the sender’s persistent VOID XMD virtual-coin balance.',
   daily: 'Claim the virtual-coin daily reward once every 24 hours.',
   pay: 'Transfer virtual coins from the sender to a mentioned/replied user.',
-  block: 'Owner-only command to block a WhatsApp user through the linked account.',
-  unblock: 'Owner-only command to unblock a WhatsApp user through the linked account.',
+  block: 'Session-owner command to block a WhatsApp user through this linked account.',
+  unblock: 'Session-owner command to unblock a WhatsApp user through this linked account.',
   restart: 'Owner-only command that exits the Node.js process so the hosting platform can restart the bot.'
 };
 
@@ -342,7 +342,8 @@ const requirements = {
 
 function access(detail) {
   const tags = [];
-  if (detail.ownerOnly) tags.push('Owner only');
+  if (detail.ownerOnly) tags.push('Main owner only');
+  if (detail.sessionOwnerOnly) tags.push('Session owner');
   if (detail.groupOnly) tags.push('Group only');
   if (detail.adminOnly) tags.push('Group admin');
   return tags.length ? tags.join(' • ') : 'Everyone (subject to bot MODE)';
@@ -376,7 +377,8 @@ function buildDetails() {
         category,
         description: builtin[name] || 'Built-in VOID XMD command.',
         aliases: builtinAliases[name] || [],
-        ownerOnly: ['public','private','block','unblock','restart','devices','adddevice','removedevice'].includes(name),
+        ownerOnly: ['restart','devices','adddevice','removedevice'].includes(name),
+        sessionOwnerOnly: ['public','private','block','unblock'].includes(name),
         groupOnly: ['admins','groupinfo','groupid','link','revokeinvite','promote','demote','kick','mute','unmute','tagall','hidetag','warn','warnings','clearwarn','setwelcome','setgoodbye','setrules','rules','antilink','antibadwords'].includes(name),
         adminOnly: ['link','revokeinvite','promote','demote','kick','mute','unmute','tagall','hidetag','warn','clearwarn','setwelcome','setgoodbye','setrules','antilink','antibadwords'].includes(name)
       });

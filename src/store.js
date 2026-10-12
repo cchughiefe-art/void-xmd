@@ -7,6 +7,7 @@ const defaults = {
   groups: {},
   economy: {},
   global: {},
+  accounts: { sessions: {} },
   business: { sessions: {} },
   secrets: { apiKeys: {}, currentKey: '' }
 };
@@ -15,6 +16,15 @@ const dbFile = path.join(config.dataDir, 'void-xmd.json');
 let state = structuredClone(defaults);
 let delayedSaveTimer = null;
 let dirty = false;
+
+const accountDefaults = () => ({
+  mode: '',
+  anticall: false,
+  autoviewstatus: false,
+  autostatusreact: false,
+  autobio: false,
+  alwaysonline: false
+});
 
 const businessDefaults = () => ({
   enabled: false,
@@ -66,6 +76,9 @@ export function loadStore() {
       groups: parsed.groups || {},
       economy: parsed.economy || {},
       global: parsed.global || {},
+      accounts: {
+        sessions: parsed.accounts?.sessions || {}
+      },
       business: {
         sessions: parsed.business?.sessions || {}
       },
@@ -139,6 +152,41 @@ export const store = {
     state.global[key] = value;
     saveNow();
     return value;
+  },
+
+  getSession(sessionId = 'primary') {
+    const id = String(sessionId || 'primary');
+    state.accounts ||= { sessions: {} };
+    state.accounts.sessions ||= {};
+    const current = state.accounts.sessions[id] || {};
+    const base = accountDefaults();
+
+    if (id === 'primary') {
+      for (const key of Object.keys(base)) {
+        if (current[key] === undefined && state.global[key] !== undefined) base[key] = state.global[key];
+      }
+    }
+
+    state.accounts.sessions[id] = { ...base, ...current };
+    return state.accounts.sessions[id];
+  },
+
+  updateSession(sessionId = 'primary', patch = {}) {
+    const id = String(sessionId || 'primary');
+    state.accounts ||= { sessions: {} };
+    state.accounts.sessions ||= {};
+    state.accounts.sessions[id] = { ...this.getSession(id), ...patch };
+    saveNow();
+    return state.accounts.sessions[id];
+  },
+
+  getSessionSetting(sessionId = 'primary', key, fallback = undefined) {
+    const value = this.getSession(sessionId)?.[key];
+    return value === undefined || value === '' ? fallback : value;
+  },
+
+  setSessionSetting(sessionId = 'primary', key, value) {
+    return this.updateSession(sessionId, { [key]: value })[key];
   },
 
   getBusiness(sessionId = 'primary') {
