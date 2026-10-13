@@ -12,6 +12,7 @@ const MAX_HISTORY_MESSAGES = 16;
 const MAX_HISTORY_CHATS = 250;
 const AI_OUTGOING_TTL_MS = 60000;
 const HUMAN_TAKEOVER_GRACE_MS = 60000;
+const HANDOFF_PIN_SECONDS = 2592000;
 
 const sidOf = value => String(value || 'primary');
 const customerOf = value => jidNumber(value) || String(value || '');
@@ -32,9 +33,9 @@ function rememberConversationPhone(raw, chat, sender = '') {
   const candidates = [
     raw?.key?.remoteJidAlt,
     raw?.key?.participantAlt,
-    sender,
     raw?.key?.remoteJid,
-    raw?.key?.participant
+    raw?.key?.participant,
+    ...(!raw?.key?.fromMe ? [sender] : [])
   ].filter(Boolean);
 
   let phone = '';
@@ -173,11 +174,48 @@ function clearHumanTimer(sessionId, customer) {
   humanTakeoverTimers.delete(key);
 }
 
+function sessionOwnerJid(sock) {
+  const candidates = [sock?.authState?.creds?.me?.id, sock?.user?.id].filter(Boolean);
+  for (const candidate of candidates) {
+    if (!isPhoneJid(candidate)) continue;
+    const digits = validPhoneDigits(jidNumber(candidate));
+    if (digits) return `${digits}@s.whatsapp.net`;
+  }
+  const fallback = validPhoneDigits(jidNumber(sock?.user?.id));
+  return fallback ? `${fallback}@s.whatsapp.net` : '';
+}
+
+async function pinHandoffMessage(sock, chat, raw) {
+  const key = raw?.key;
+  if (!chat || !key?.id) return null;
+  try {
+    await sock.sendMessage(chat, { pin: { type: 1, time: HANDOFF_PIN_SECONDS, key } });
+    return { chat: String(chat), key: { ...key, remoteJid: key.remoteJid || chat } };
+  } catch (error) {
+    console.error(`[hybrid-ai-pin] ${error.message}`);
+    return null;
+  }
+}
+
+async function unpinHandoffMessage(sock, pause, fallbackChat = '') {
+  const key = pause?.handoffMessageKey;
+  const chat = String(pause?.handoffChat || fallbackChat || key?.remoteJid || '');
+  if (!chat || !key?.id) return false;
+  try {
+    await sock.sendMessage(chat, { pin: { type: 0, key } });
+    return true;
+  } catch (error) {
+    console.error(`[hybrid-ai-unpin] ${error.message}`);
+    return false;
+  }
+}
+
 async function sendHandoffNotice(sock, sid, customer, chat, raw, message) {
-  const sessionOwnerNumber = jidNumber(sock.user?.id);
-  const recipients = new Set();
-  if (sessionOwnerNumber) recipients.add(`${sessionOwnerNumber}@s.whatsapp.net`);
-  if (config.owner) recipients.add(`${config.owner}@s.whatsapp.net`);
+  const ownerJid = sessionOwnerJid(sock);
+  if (!ownerJid) {
+    console.error(`[hybrid-ai:${sid}] Could not resolve linked session owner JID.`);
+    return;
+  }
 
   const resolvedPhone =
     rememberConversationPhone(raw, chat, customer) ||
@@ -207,10 +245,8 @@ async function sendHandoffNotice(sock, sid, customer, chat, raw, message) {
     `After your manual reply, normal human-takeover mode begins. When the customer messages again, you have 60 seconds to respond. If you do not respond within 60 seconds, AI resumes automatically.\n\n` +
     `Force AI back immediately: .resumeai ${resumeTarget}`;
 
-  for (const jid of recipients) {
-    const sent = await sock.sendMessage(jid, { text }).catch(() => null);
-    markAiOutgoing(sent);
-  }
+  const sent = await sock.sendMessage(ownerJid, { text }).catch(() => null);
+  markAiOutgoing(sent);
 }
 
 async function respondWithAi({ sock, raw, chat, message, sid, customer, settings, addUser = true }) {
@@ -255,7 +291,11 @@ async function respondWithAi({ sock, raw, chat, message, sid, customer, settings
 
   if (handoff) {
     clearHumanTimer(sid, customer);
-    store.setBusinessChatPaused(sid, customer, true, 'handoff');
+    const pinned = await pinHandoffMessage(sock, chat, raw);
+    store.setBusinessChatPaused(sid, customer, true, 'handoff', {
+      handoffChat: pinned?.chat || String(chat || ''),
+      handoffMessageKey: pinned?.key || raw?.key || null
+    });
     await sendHandoffNotice(sock, sid, customer, chat, raw, message);
   }
 
@@ -343,6 +383,11 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
       if (customer && customer !== config.owner) {
         clearHumanTimer(sid, customer);
         const current = store.getBusinessChatPause(sid, customer);
+
+        if (current?.reason === 'handoff') {
+          await unpinHandoffMessage(sock, current, chat);
+        }
+
         const keepHard = current?.reason === 'manual-command';
 
         store.setBusinessChatPaused(

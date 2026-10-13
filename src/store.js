@@ -223,7 +223,7 @@ export const store = {
     return state.business.sessions[id];
   },
 
-  setBusinessChatPaused(sessionId = 'primary', chatKey, paused = true, reason = 'manual-command') {
+  setBusinessChatPaused(sessionId = 'primary', chatKey, paused = true, reason = 'manual-command', meta = {}) {
     const key = String(chatKey || '').trim();
     if (!key) throw new Error('A customer number is required.');
 
@@ -231,7 +231,9 @@ export const store = {
     const pausedChats = { ...(current.pausedChats || {}) };
 
     if (paused) {
+      const extra = meta && typeof meta === 'object' ? meta : {};
       pausedChats[key] = {
+        ...extra,
         at: Date.now(),
         reason: String(reason || 'manual-command')
       };
@@ -251,6 +253,7 @@ export const store = {
 
     if (typeof value === 'object') {
       return {
+        ...value,
         at: Number(value.at || 0),
         reason: String(value.reason || 'legacy')
       };
