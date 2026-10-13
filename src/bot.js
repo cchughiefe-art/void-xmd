@@ -11,17 +11,12 @@ import makeWASocket, {
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { config } from './config.js';
-import { execute } from './commands.js';
+const { execute } = await import(config.chatOnly ? './chat-commands.js' : './commands.js');
 import { store } from './store.js';
 import { jidNumber, sleep } from './utils.js';
-import {
-  applyConnectionAutomation,
-  handleCalls,
-  handleDeletedMessages,
-  handleMessageAutomation,
-  handleStatusAutomation,
-  rememberMessage
-} from './automation.js';
+const automation = config.chatOnly ? {} : await import('./automation.js');
+const { applyConnectionAutomation, handleCalls, handleDeletedMessages,
+  handleMessageAutomation, handleStatusAutomation, rememberMessage } = automation;
 import { handleBusinessMessage } from './business-assistant.js';
 
 const originalConsoleInfo = console.info.bind(console);
@@ -385,6 +380,7 @@ function scheduleReconnect(record) {
 function attachCommonEvents(record, sock) {
   const sessionId = record.id;
 
+  if (!config.chatOnly) {
   sock.ev.on('call', calls => {
     handleCalls(sock, calls, sessionId).catch(error => logger.error({ err: error, session: sessionId }, 'Call automation failed'));
   });
@@ -410,6 +406,8 @@ function attachCommonEvents(record, sock) {
     }
   });
 
+  }
+
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     for (const raw of messages) {
       try {
@@ -418,16 +416,17 @@ function attachCommonEvents(record, sock) {
         // Status messages are not guaranteed to use a normal notify upsert
         // on every linked account/client state, so process them first.
         if (raw.key.remoteJid === 'status@broadcast') {
-          await handleStatusAutomation(sock, raw, sessionId);
+          if (!config.chatOnly) await handleStatusAutomation(sock, raw, sessionId);
           continue;
         }
 
         if (type !== 'notify') continue;
 
-        rememberMessage(raw);
+        if (!config.chatOnly) rememberMessage(raw);
         const body = bodyOf(raw).trim();
         const chat = raw.key.remoteJid;
         const isGroup = chat.endsWith('@g.us');
+        if (config.chatOnly && (isGroup || chat.endsWith('@broadcast') || chat.endsWith('@newsletter'))) continue;
         const sender = isGroup ? (raw.key.participant || raw.participant || sock.user?.id) : (raw.key.fromMe ? sock.user?.id || chat : chat);
         store.see(sender);
 
@@ -444,7 +443,7 @@ function attachCommonEvents(record, sock) {
         const messageContent = raw.message?.[messageType];
         const contextInfo = messageContent?.contextInfo || raw.message?.extendedTextMessage?.contextInfo || raw.message?.imageMessage?.contextInfo || raw.message?.videoMessage?.contextInfo || raw.message?.documentMessage?.contextInfo || {};
 
-        const moderated = await handleMessageAutomation({ sock, raw, chat, sender, body, isGroup, isAdmin, isBotAdmin, metadata, contextInfo, sessionId });
+        const moderated = !config.chatOnly && await handleMessageAutomation({ sock, raw, chat, sender, body, isGroup, isAdmin, isBotAdmin, metadata, contextInfo, sessionId });
         if (moderated) continue;
 
         const businessHandled = await handleBusinessMessage({
@@ -523,7 +522,7 @@ async function connectSession(record) {
     browser: ['Ubuntu', 'Chrome', '20.0.04'],
     markOnlineOnConnect: false,
     syncFullHistory: false,
-    generateHighQualityLinkPreview: true,
+    generateHighQualityLinkPreview: !config.chatOnly,
     connectTimeoutMs: 60000,
     defaultQueryTimeoutMs: 60000,
     keepAliveIntervalMs: 10000
@@ -564,7 +563,7 @@ async function connectSession(record) {
       record.resolvePairingReady = null;
       record.phone = record.phone || jidNumber(sock.user?.id);
       try { record.stopConnectionAutomation?.(); } catch {}
-      record.stopConnectionAutomation = applyConnectionAutomation(sock, record.id);
+      record.stopConnectionAutomation = config.chatOnly ? () => {} : applyConnectionAutomation(sock, record.id);
       logger.info({ jid: sock.user?.id, session: record.id }, `${config.name} connected`);
     }
 

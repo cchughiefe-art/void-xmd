@@ -5,11 +5,12 @@ import { jidNumber } from './utils.js';
 
 const histories = new Map();
 const queues = new Map();
+let pendingReplies = 0;
 const aiOutgoing = new Set();
 const humanTakeoverTimers = new Map();
 
-const MAX_HISTORY_MESSAGES = 16;
-const MAX_HISTORY_CHATS = 250;
+const MAX_HISTORY_MESSAGES = config.chatOnly ? 10 : 16;
+const MAX_HISTORY_CHATS = config.chatOnly ? 80 : 250;
 const AI_OUTGOING_TTL_MS = 60000;
 const HUMAN_TAKEOVER_GRACE_MS = 60000;
 const HANDOFF_PIN_SECONDS = 2592000;
@@ -20,12 +21,12 @@ const historyKey = (sessionId, chat) => `${sidOf(sessionId)}::${customerOf(chat)
 const phoneByConversation = new Map();
 
 function isPhoneJid(value) {
-  return /@(?:s\\.whatsapp\\.net|c\\.us)$/i.test(String(value || ''));
+  return /@(?:s\.whatsapp\.net|c\.us)$/i.test(String(value || ''));
 }
 
 function validPhoneDigits(value) {
-  const digits = String(value || '').replace(/\\D/g, '');
-  return /^\\d{8,15}$/.test(digits) ? digits : '';
+  const digits = String(value || '').replace(/\D/g, '');
+  return /^\d{8,15}$/.test(digits) ? digits : '';
 }
 
 function rememberConversationPhone(raw, chat, sender = '') {
@@ -48,7 +49,10 @@ function rememberConversationPhone(raw, chat, sender = '') {
     }
   }
 
-  if (phone && conversationKey) phoneByConversation.set(conversationKey, phone);
+  if (phone && conversationKey) {
+    phoneByConversation.set(conversationKey, phone);
+    if (phoneByConversation.size > MAX_HISTORY_CHATS * 2) phoneByConversation.delete(phoneByConversation.keys().next().value);
+  }
   if (!phone && conversationKey) phone = phoneByConversation.get(conversationKey) || '';
   return phone;
 }
@@ -151,12 +155,15 @@ function transcript(sessionId, chat) {
 }
 
 async function enqueue(key, task) {
+  if (config.chatOnly && pendingReplies >= 16) throw new Error('AI is busy. Please try again shortly.');
+  pendingReplies++;
   const previous = queues.get(key) || Promise.resolve();
   const current = previous.catch(() => {}).then(task);
   queues.set(key, current);
   try {
     return await current;
   } finally {
+    pendingReplies--;
     if (queues.get(key) === current) queues.delete(key);
   }
 }

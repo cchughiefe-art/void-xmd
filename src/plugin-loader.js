@@ -12,7 +12,8 @@ export async function loadPlugins() {
   registry.clear();
   primary.length = 0;
   fs.mkdirSync(pluginDirectory, { recursive: true }); fs.mkdirSync(generatedDirectory,{recursive:true});
-  const files = [pluginDirectory,generatedDirectory].flatMap(directory=>fs.readdirSync(directory).filter(name=>/\.(?:js|mjs)$/.test(name)&&!name.startsWith('_')).sort().map(file=>({file,directory})));
+  const directories = config.chatOnly ? [pluginDirectory] : [pluginDirectory, generatedDirectory];
+  const files = directories.flatMap(directory=>fs.readdirSync(directory).filter(name=>/\.(?:js|mjs)$/.test(name)&&!name.startsWith('_') && (!config.chatOnly || name === 'business-ai.js')).sort().map(file=>({file,directory})));
   for (const {file,directory} of files) {
     const module = await import(`${pathToFileURL(path.join(directory, file)).href}?v=${Date.now()}`);
     const commands = Array.isArray(module.default) ? module.default : [module.default];

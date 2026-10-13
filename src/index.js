@@ -15,7 +15,7 @@ const { config, validateConfig } = await import('./config.js');
 const { startBot } = await import('./bot.js');
 const { loadStore } = await import('./store.js');
 const { loadPlugins } = await import('./plugin-loader.js');
-const { startWebServer } = await import('./web-server.js');
+const { startWebServer } = await import(config.chatOnly ? './chat-web-server.js' : './web-server.js');
 
 validateConfig();
 loadStore();
@@ -24,7 +24,7 @@ startWebServer();
 
 // Install optional YouTube Node downloader dependencies on the server itself.
 // This runs in the background so WhatsApp startup is not blocked.
-import('./youtube-audio.js')
+if (!config.chatOnly) import('./youtube-audio.js')
   .then(module => module.ensureYoutubeNodeDependencies())
   .then(result => {
     if (result?.installedNow) {

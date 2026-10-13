@@ -2,7 +2,8 @@ import path from 'node:path';
 
 const digits = (value = '') => String(value).replace(/\D/g, '');
 export const config = Object.freeze({
-  name: process.env.BOT_NAME || 'VOID XMD',
+  chatOnly: process.env.CHAT_ONLY === 'true',
+  name: process.env.BOT_NAME || 'VOID XMD V2',
   prefix: process.env.PREFIX || '.',
   mode: (process.env.MODE || 'public').toLowerCase(),
   owner: digits(process.env.OWNER_NUMBER),
