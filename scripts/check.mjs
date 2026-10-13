@@ -12,4 +12,6 @@ function check(dir) {
   }
 }
 for (const dir of ['src', 'scripts', 'tests']) check(dir);
+const root = spawnSync(process.execPath, ['--check', 'index.js'], { stdio: 'inherit' });
+if (root.status !== 0) process.exit(root.status || 1);
 console.log('All JavaScript syntax checks passed.');
