@@ -1,13 +1,16 @@
 {
-  "name": "void-xmd",
-  "version": "1.0.0",
+  "name": "void-xmd-v2",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Raven-ready WhatsApp multi-device bot",
+  "description": "VOID XMD V2 multi-account WhatsApp AI chat bot",
   "main": "src/index.js",
   "scripts": {
-    "start": "mkdir -p data; if [ -f data/VOID-XMD-UPDATE.tar.gz ]; then echo 'Applying VOID XMD update...'; tar -xzf data/VOID-XMD-UPDATE.tar.gz -C . && rm -f data/VOID-XMD-UPDATE.tar.gz && echo 'VOID XMD update applied.'; fi; if [ -f data/VOID-XMD-AUTH.tar.gz ]; then echo 'Restoring WhatsApp session...'; rm -rf data/auth && tar -xzf data/VOID-XMD-AUTH.tar.gz -C data && rm -f data/VOID-XMD-AUTH.tar.gz && echo 'Session restored.'; fi; node src/index.js",
-    "check": "node --check src/*.js && node --check src/plugins/*.js"
+    "start": "node --max-old-space-size=320 src/chat-index.js",
+    "check": "node scripts/check.mjs",
+    "start:chat": "node --max-old-space-size=320 src/chat-index.js",
+    "test": "node --test tests/*.test.js",
+    "start:full": "mkdir -p data; if [ -f data/VOID-XMD-UPDATE.tar.gz ]; then echo 'Applying VOID XMD update...'; tar -xzf data/VOID-XMD-UPDATE.tar.gz -C . && rm -f data/VOID-XMD-UPDATE.tar.gz && echo 'VOID XMD update applied.'; fi; if [ -f data/VOID-XMD-AUTH.tar.gz ]; then echo 'Restoring WhatsApp session...'; rm -rf data/auth && tar -xzf data/VOID-XMD-AUTH.tar.gz -C data && rm -f data/VOID-XMD-AUTH.tar.gz && echo 'Session restored.'; fi; node src/index.js"
   },
   "engines": {
     "node": ">=20"
@@ -15,9 +18,7 @@
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "7.0.0-rc14",
-    "pino": "^9.7.0",
-    "@distube/ytdl-core": "4.16.12",
-    "yt-search": "2.13.1"
+    "pino": "^9.7.0"
   },
   "allowScripts": {
     "@whiskeysockets/baileys@7.0.0-rc14": true
