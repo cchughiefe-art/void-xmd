@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+process.env.CHAT_ONLY = 'true';
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'void-chat-test-'));
+const { loadStore } = await import('../src/store.js');
+loadStore();
+const { loadPlugins, pluginDetails } = await import('../src/plugin-loader.js');
+const { execute } = await import('../src/chat-commands.js');
+test('chat mode loads only assistant plugins and rejects non-owner account controls', async () => {
+  await loadPlugins();
+  const names = pluginDetails().map(x => x.name);
+  assert.ok(names.includes('businessai'));
+  assert.ok(!names.includes('play'));
+  assert.ok(!names.includes('feature'));
+  const context = { args: ['2348012345678'], text: '', reply: async () => {}, isOwner: false, isSessionOwner: false, deviceManager: { add: () => { throw new Error('Should never run'); } } };
+  await assert.rejects(execute({ ...context, command: 'adddevice' }), /Main owner/);
+  await assert.rejects(execute({ ...context, command: 'businessai' }), /owner/);
+  let message;
+  await execute({ ...context, isOwner: true, command: 'play', reply: async text => { message = text; } });
+  assert.match(message, /Chat-only/);
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+});

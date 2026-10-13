@@ -1,0 +1,48 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'void-ai-test-'));
+process.env.CHAT_ONLY = 'true';
+process.env.GEMINI_API_KEY = 'test-gemini';
+process.env.GROQ_API_KEY = 'test-groq';
+process.env.OPENROUTER_API_KEY = 'test-openrouter';
+process.env.AI_PROVIDER_ORDER = 'gemini,groq,openrouter,cloudflare,mistral';
+const { store, loadStore } = await import('../src/store.js');
+loadStore();
+const { getAiProviders, askAi, aiProviderStatus } = await import('../src/ai-provider.js');
+const originalFetch = globalThis.fetch;
+test('provider discovery, fallback, cooldown, free model guard and isolation', async () => {
+  try {
+    process.env.MISTRAL_API_KEY = 'test-trial';
+    assert.deepEqual(getAiProviders().map(x => x.name), ['gemini', 'groq', 'openrouter']);
+    process.env.CLOUDFLARE_API_TOKEN = 'test-cf';
+    process.env.CLOUDFLARE_ACCOUNT_ID = 'abc123';
+    assert.match(getAiProviders().find(x => x.name === 'cloudflare').baseUrl, /accounts\/abc123\/ai\/v1$/);
+    store.setGlobal('openrouterModel', 'paid/model');
+    assert.ok(!getAiProviders().some(x => x.name === 'openrouter'));
+    store.setGlobal('openrouterModel', 'openrouter/free');
+    const requests = [];
+    globalThis.fetch = async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      if (url.includes('googleapis')) return new Response('secret error body must not leak', { status: 429, headers: { 'retry-after': '60' } });
+      return Response.json({ choices: [{ message: { content: 'Hello there' }, finish_reason: 'stop' }] });
+    };
+    assert.equal(await askAi('Hi', { system: 'Friendly' }), 'Hello there');
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].body.messages[0].content, 'Friendly');
+    assert.ok(aiProviderStatus().find(x => x.name === 'gemini').cooldownSeconds > 0);
+    requests.length = 0;
+    await askAi('Again');
+    assert.equal(requests.length, 1);
+    assert.ok(requests[0].url.includes('groq'));
+    process.env.AI_PROVIDER_ORDER = 'openrouter';
+    globalThis.fetch = async () => Response.json({ choices: [{ message: { content: 'cut off' }, finish_reason: 'length' }] });
+    await assert.rejects(askAi('Hi'), /temporarily unavailable/);
+    store.updateBusiness('primary', { enabled: true, personality: 'Primary voice' });
+    store.updateBusiness('secondary', { enabled: false, personality: 'Second voice' });
+    assert.equal(store.getBusiness('primary').personality, 'Primary voice');
+    assert.equal(store.getBusiness('secondary').personality, 'Second voice');
+  } finally { globalThis.fetch = originalFetch; fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); }
+});
