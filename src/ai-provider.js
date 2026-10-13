@@ -22,6 +22,7 @@ export function getAiProviders() {
   for (const name of [...new Set(order)]) {
     const item = providerCatalog.find(x => x.name === name);
     if (!item || (item.experimental && !allowedTrials().has(name))) continue;
+    if (store.getGlobal(`${name}Enabled`, true) === false) continue;
     const saved = store.getApiKey(name);
     const key = saved || process.env[item.env] || '';
     if (!key) continue;
