@@ -48,4 +48,15 @@ GitHub Models was investigated but current documentation redirected away from it
 
 ## Existing full bot
 
-The original runtime remains available via `npm run start:full` in the GitHub checkout. The release ZIP intentionally contains only the chat runtime and its dependencies; use the original checkout for full bot features.
+The original runtime remains available via `npm run start:full` in the GitHub checkout. The release ZIP contains the chat runtime, dashboard, and its dependencies; use the original checkout for full bot features.
+
+
+## Settings website
+
+The dashboard is served by the same bot process at `/`. Set a strong WEB_ADMIN_KEY in your server environment or `.env`, then use it as the admin password. Browser logins last about 30 minutes and use an HttpOnly SameSite cookie. API mutations require a session-specific CSRF token. Saved API keys are never returned by the settings API. Only the main admin has dashboard access; this is not a public customer portal.
+
+Open the hosting panel's public address and allocated port, for example `http://YOUR_SERVER_ADDRESS:YOUR_PORT/`, or use the HTTPS domain assigned by your provider. Prefer HTTPS when entering passwords or keys. PORT must match the allocated port. If the host does not expose HTTP access, request that from support; the website cannot be reached merely by starting Node.js. No public dashboard URL was supplied or deployed during this build.
+
+Nervox startup: the default `node ${STARTUP_FILE}` now works with STARTUP FILE set to `index.js`. The root entry starts chat mode with a 320 MB JS heap ceiling. A repository URL must point to the Git repository, not its GitHub `/tree/` page. Use repository `https://github.com/cchughiefe-art/void-xmd` and branch `void-xmd-v2` if there is a separate branch setting. If your host cannot select a branch, upload and extract the latest dashboard ZIP manually. Do not merge into main merely to make a panel's default clone work.
+
+Dashboard controls include primary/extra account pairing, per-account AI on/off, public/private mode, personality, knowledge, tone, rules, contact pause/resume, conversation memory clearing, non-primary account disconnect, provider keys/models, saved-key removal, and provider enable/disable. Environment credentials must be removed in the server settings. Experimental-provider flags remain server settings.
