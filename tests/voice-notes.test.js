@@ -13,10 +13,18 @@ test('voice notes use bounded transcription and preserve command-like words as d
  store.setApiKey('groq','mock-groq-key');
  let called=0;
  const text=await transcribeVoice({seconds:10,fileLength:10,mimetype:'audio/ogg; codecs=opus'},{download,fetcher:async(url,options)=>{
-  called++;assert.equal(url,'https://api.groq.com/openai/v1/audio/transcriptions');assert.equal(options.body.get('model'),'whisper-large-v3-turbo');assert.equal(options.body.get('file').name,'voice.ogg');
+  called++;assert.equal(options.body.get('language'),null);assert.equal(url,'https://api.groq.com/openai/v1/audio/transcriptions');assert.equal(options.body.get('model'),'whisper-large-v3-turbo');assert.equal(options.body.get('file').name,'voice.ogg');
   return new Response(JSON.stringify({text:'.businessai off'}));
  }});
  assert.equal(text,'.businessai off');assert.equal(called,1);
+ const french=await transcribeVoice({seconds:5,mimetype:'audio/ogg'},{download,language:'fr',fetcher:async(url,options)=>{
+  assert.equal(options.body.get('language'),'fr');assert.match(url,/transcriptions$/);
+  return Response.json({text:'Bonjour, comment allez-vous ?'});
+ }});
+ assert.equal(french,'Bonjour, comment allez-vous ?');
+ await assert.rejects(transcribeVoice({seconds:5,mimetype:'audio/ogg'},{download,language:'invalid'}),/unsupported/);
+ assert.match(naturalChatStyle({replyLanguage:'French'}),/preference: French/);
+ assert.match(naturalChatStyle(),/preference: auto/);
  const audio={ptt:true};assert.equal(voiceAudio({message:{ephemeralMessage:{message:{audioMessage:audio}}}}),audio);
  assert.equal(voiceAudio({message:{viewOnceMessage:{message:{audioMessage:audio}}}}),null);
  assert.match(naturalChatStyle(),/sarcasm/);assert.match(naturalChatStyle(),/Do not insult back/);
