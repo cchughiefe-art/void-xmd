@@ -203,6 +203,17 @@ export default [
   },
 
   setText('setaipersonality','personality','.setaipersonality Friendly, natural and human.','Set the normal-chat personality for this WhatsApp account'),
+  {
+    name: 'learntone', category: 'AI ASSISTANT', sessionOwnerOnly: true,
+    description: 'Learn your writing tone: on, off or clear',
+    async run(ctx) {
+      const sid = sessionIdOf(ctx), action = String(ctx.args[0] || '').toLowerCase();
+      if (action === 'clear') { store.updateBusiness(sid, { learnedTone: [] }); return ctx.reply('Learned tone samples cleared.'); }
+      const enabled = onOff(action);
+      store.updateBusiness(sid, { learnTone: enabled });
+      return ctx.reply(enabled ? 'Tone learning enabled for your outgoing personal replies.' : 'Tone learning disabled.');
+    }
+  },
   setText('setaiexamples','styleExamples','.setaiexamples Paste a few example chats here','Teach the phrasing and rhythm of this account using example replies'),
   setText('setbusinessname','name','.setbusinessname Bright Accessories','Set the business name for this WhatsApp account'),
   setText('setbusinessinfo','info','.setbusinessinfo Describe products, prices, delivery, ordering and payment rules here','Set the business knowledge for this WhatsApp account'),
