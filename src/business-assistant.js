@@ -186,11 +186,11 @@ function sessionOwnerJid(sock) {
   return fallback ? `${fallback}@s.whatsapp.net` : '';
 }
 
-async function pinHandoffMessage(sock, chat, raw) {
+export async function pinHandoffMessage(sock, chat, raw) {
   const key = raw?.key;
   if (!chat || !key?.id) return null;
   try {
-    await sock.sendMessage(chat, { pin: { type: 1, time: HANDOFF_PIN_SECONDS, key } });
+    await sock.sendMessage(chat, { pin: { ...key, remoteJid: key.remoteJid || chat }, type: 1, time: HANDOFF_PIN_SECONDS });
     return { chat: String(chat), key: { ...key, remoteJid: key.remoteJid || chat } };
   } catch (error) {
     console.error(`[hybrid-ai-pin] ${error.message}`);
@@ -203,7 +203,7 @@ async function unpinHandoffMessage(sock, pause, fallbackChat = '') {
   const chat = String(pause?.handoffChat || fallbackChat || key?.remoteJid || '');
   if (!chat || !key?.id) return false;
   try {
-    await sock.sendMessage(chat, { pin: { type: 0, key } });
+    await sock.sendMessage(chat, { pin: { ...key, remoteJid: key.remoteJid || chat }, type: 2 });
     return true;
   } catch (error) {
     console.error(`[hybrid-ai-unpin] ${error.message}`);
@@ -248,7 +248,7 @@ async function sendHandoffNotice(sock, sid, customer, chat, raw, message) {
       : 'Your handover mode is manual. AI stays paused after your reply until you send .resumeai.\n\n') +
     `Force AI back immediately: .resumeai ${resumeTarget}`;
 
-  const sent = await sock.sendMessage(ownerJid, { text }).catch(error => { console.error(`[hybrid-ai:${sid}] Handover notification failed: ${error.message}`); return null; });
+  const sent = await sock.sendMessage(ownerJid, { text, linkPreview: null }).catch(error => { console.error(`[hybrid-ai:${sid}] Handover notification failed: ${error.message}`); return null; });
   markAiOutgoing(sent);
 }
 
@@ -288,7 +288,7 @@ async function respondWithAi({ sock, raw, chat, message, sid, customer, settings
   const handoff = answer.includes('[[HANDOFF]]');
   answer = answer.replace(/\[\[HANDOFF\]\]/g, '').trim() || 'A human will get back to you shortly.';
 
-  const sent = await sock.sendMessage(chat, { text: answer }, { quoted: raw });
+  const sent = await sock.sendMessage(chat, { text: answer, linkPreview: null }, { quoted: raw });
   markAiOutgoing(sent);
   addHistory(sid, chat, 'assistant', answer);
 
