@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { config } from './config.js';
@@ -26,9 +27,9 @@ async function readJson(req) {
 }
 function phone(value) { const result = String(value || '').replace(/\D/g, ''); if (!/^\d{8,15}$/.test(result)) fail('Enter a complete phone number with country code.'); return result; }
 
-export function createChatServer({ devices = { list: listDevices, add: addDevice, remove: removeDevice, pair: requestPairing }, adminKey = config.webAdminKey } = {}) {
+export function createChatServer({ devices = { list: listDevices, add: addDevice, remove: removeDevice, pair: requestPairing }, adminKey = config.webAdminKey, tls, allowSignup = process.env.WEB_SIGNUP_ENABLED === 'true' } = {}) {
   const sessions = new Map(); const attempts = new Map(); let pairingBusy = false;
-  return http.createServer(async (req, res) => {
+  const handler = async (req, res) => {
     res.setHeader('cache-control', 'no-store');
     res.setHeader('x-content-type-options', 'nosniff');
     res.setHeader('x-frame-options', 'DENY');
@@ -46,8 +47,28 @@ export function createChatServer({ devices = { list: listDevices, add: addDevice
         let origin; try { origin = new URL(req.headers.origin); } catch { fail('Invalid origin.', 403); }
         if (origin.host !== req.headers.host) fail('Cross-site request rejected.', 403);
       }
-      const secure = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+      const secure = req.socket.encrypted || (process.env.WEB_TRUST_PROXY === 'true' && req.headers['x-forwarded-proto'] === 'https');
       const cookie = value => `void_admin=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${value ? SESSION_TTL / 1000 : 0}${secure ? '; Secure' : ''}`;
+      if (req.method === 'GET' && path === '/api/public') return send(200, { signupEnabled: allowSignup && Boolean(secure), requiresHttps: allowSignup && !secure });
+      if (req.method === 'POST' && path === '/api/signup') {
+        if (!allowSignup) fail('Customer signup is not enabled yet.', 403);
+        if (!secure) fail('Customer signup requires HTTPS. Contact the server owner.', 403);
+        const ip = req.socket.remoteAddress || 'unknown';
+        const record = attempts.get(ip) || { count: 0, until: now + 60000 };
+        if (record.count >= 5) fail('Too many attempts. Try again later.', 429);
+        record.count++; attempts.set(ip, record);
+        const data = await readJson(req), number = phone(data.phone);
+        if (typeof data.password !== 'string' || data.password.length < 12 || data.password.length > 128) fail('Use a password of 12 to 128 characters.');
+        const users = { ...store.getGlobal('webSessionUsers', {}) };
+        if (number === config.owner || number === config.pairingNumber || users[number] || Object.values(users).some(x => x.phone === number) || devices.list().some(x => x.phone === number || x.id === number)) fail('This number is already assigned. Sign in or contact the owner.', 409);
+        const ids = new Set([...devices.list().map(x => x.id), ...Object.keys(users)]);
+        if (ids.size >= Number(process.env.MAX_WHATSAPP_SESSIONS || 4)) fail('This server has no free WhatsApp slots. Contact the owner.', 409);
+        const salt = crypto.randomBytes(16).toString('hex');
+        users[number] = { phone: number, salt, hash: crypto.scryptSync(data.password, salt, 32).toString('hex'), revision: crypto.randomBytes(16).toString('hex'), selfSignup: true };
+        store.setGlobal('webSessionUsers', users);
+        store.updateBusiness(number, { enabled: false, learnTone: false });
+        return send(201, { accountId: number, message: 'Account created. Sign in and pair WhatsApp to verify control of your number.' });
+      }
       if (req.method === 'POST' && path === '/api/login') {
         const ip = req.socket.remoteAddress || 'unknown'; const record = attempts.get(ip) || { count: 0, until: now + 60000 };
         if (record.count >= 5) return send(429, { error: 'Too many attempts. Try again in one minute.' });
@@ -81,7 +102,7 @@ export function createChatServer({ devices = { list: listDevices, add: addDevice
       if (req.method === 'POST' && path === '/api/logout') { if (token) sessions.delete(token); res.setHeader('set-cookie', cookie('')); return send(200, { ok: true }); }
       if (req.method === 'GET' && path === '/api/state') {
         const providers = aiProviderStatus().map(p => ({ ...p, enabled: store.getGlobal(`${p.name}Enabled`, true), model: store.getGlobal(`${p.name}Model`, process.env[`${p.name.toUpperCase()}_MODEL`] || p.model), hasSavedKey: Boolean(store.getApiKey(p.name)) }));
-        return send(200, { csrf: session?.csrf || '', name: config.name, role: owner ? 'owner' : 'account', accountId: session?.accountId || '', accounts: devices.list().filter(x => owner || x.id === session.accountId), maxAccounts: Number(process.env.MAX_WHATSAPP_SESSIONS || 4), memoryMB: Math.round(process.memoryUsage().rss / 1048576), uptimeSeconds: Math.floor(process.uptime()), providers: owner ? providers : providers.map(p => ({ name: p.name, configured: p.configured, cooldownSeconds: p.cooldownSeconds })), cloudflareAccountId: !owner ? '' : process.env.CLOUDFLARE_ACCOUNT_ID || store.getGlobal('cloudflareAccountId', '') });
+        return send(200, { csrf: session?.csrf || '', name: config.name, role: owner ? 'owner' : 'account', accountId: session?.accountId || '', accounts: [...devices.list(), ...Object.entries(store.getGlobal('webSessionUsers', {})).filter(([id]) => !devices.list().some(x => x.id === id)).map(([id, user]) => ({ id, phone: user.phone, connected: false, status: 'not-linked' }))].filter(x => owner || x.id === session.accountId), maxAccounts: Number(process.env.MAX_WHATSAPP_SESSIONS || 4), memoryMB: Math.round(process.memoryUsage().rss / 1048576), uptimeSeconds: Math.floor(process.uptime()), providers: owner ? providers : providers.map(p => ({ name: p.name, configured: p.configured, cooldownSeconds: p.cooldownSeconds })), cloudflareAccountId: !owner ? '' : process.env.CLOUDFLARE_ACCOUNT_ID || store.getGlobal('cloudflareAccountId', '') });
       }
       if (req.method === 'GET' && path === '/api/status') { if (!owner) fail('Owner access required.', 403); return send(200, pairingState()); }
       if (req.method === 'POST' && path === '/api/pair') {
@@ -100,7 +121,7 @@ export function createChatServer({ devices = { list: listDevices, add: addDevice
         const [, id, action] = accountMatch;
         if (!owner && id !== session.accountId) fail('This account is not yours.', 403);
         if (!owner && ['access', 'remove'].includes(action)) fail('Owner access required.', 403);
-        if (id !== 'primary' && !devices.list().some(x => x.id === id)) fail('Account not found.', 404);
+        if (id !== 'primary' && !devices.list().some(x => x.id === id) && !store.getGlobal('webSessionUsers', {})[id]) fail('Account not found.', 404);
         if (req.method === 'GET' && !action) return send(200, { id, settings: store.getBusiness(id), mode: store.getSessionSetting(id, 'mode', 'public'), memoryChats: businessMemoryCount(id) });
         if (req.method !== 'POST') fail('Method not allowed.', 405);
         const data = await readJson(req);
@@ -108,7 +129,7 @@ export function createChatServer({ devices = { list: listDevices, add: addDevice
           const users = { ...store.getGlobal('webSessionUsers', {}) };
           if (data.revoke === true) { delete users[id]; store.setGlobal('webSessionUsers', users); return send(200, { ok: true }); }
           const assigned = devices.list().find(x => x.id === id);
-          const number = phone(assigned?.phone);
+          const number = phone(assigned?.phone || users[id]?.phone);
           const key = crypto.randomBytes(24).toString('base64url'), salt = crypto.randomBytes(16).toString('hex');
           users[id] = { phone: number, salt, hash: crypto.scryptSync(key, salt, 32).toString('hex'), revision: crypto.randomBytes(16).toString('hex') };
           store.setGlobal('webSessionUsers', users);
@@ -125,6 +146,7 @@ export function createChatServer({ devices = { list: listDevices, add: addDevice
           const mode = data.mode ?? store.getSessionSetting(id, 'mode', 'public');
           if (!['public', 'private'].includes(mode)) fail('Invalid account mode.');
           if ((patch.enabled ?? store.getBusiness(id).enabled) && mode !== 'public') fail('Use public mode for automatic AI replies.');
+          if (patch.enabled && !owner && !devices.list().some(x => x.id === id && x.connected)) fail('Link WhatsApp before enabling AI replies.');
           if (patch.enabled && !getAiProviders().length) fail('Configure an AI provider before enabling replies.');
           store.updateBusiness(id, patch); store.setSessionSetting(id, 'mode', mode); return send(200, { ok: true });
         }
@@ -155,8 +177,10 @@ export function createChatServer({ devices = { list: listDevices, add: addDevice
       console.error('Dashboard request failed:', error.message);
       send(400, { error: 'Could not complete the request. Check the server console for details.' });
     }
-  });
+  };
+  return tls ? https.createServer(tls, handler) : http.createServer(handler);
 }
 export function startWebServer() {
-  return createChatServer().listen(config.port, '0.0.0.0', () => console.log(`VOID XMD V2 dashboard on port ${config.port}`));
+  const tls = process.env.WEB_TLS_CERT && process.env.WEB_TLS_KEY ? { cert: fs.readFileSync(process.env.WEB_TLS_CERT), key: fs.readFileSync(process.env.WEB_TLS_KEY) } : undefined;
+  return createChatServer({ tls }).listen(config.port, '0.0.0.0', () => console.log(`VOID XMD V2 dashboard on port ${config.port}`));
 }
