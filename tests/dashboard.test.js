@@ -69,3 +69,39 @@ test('login attempts are limited', async () => {
     assert.equal((await fetch(url, { method: 'POST', body: JSON.stringify({ key: secret }) })).status, 429);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+test('session user login limits every account route and revokes existing sessions', async () => {
+  loadStore();
+  accounts = [{ id: 'primary', primary: true, phone: '2348000000001', connected: true }, { id: '2348000000002', phone: '2348000000002', connected: false }];
+  const server = createChatServer({ devices, adminKey: secret });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const owner = (route, data) => fetch(base + route, { method: 'POST', headers: { 'x-admin-key': secret, 'content-type': 'application/json' }, body: JSON.stringify(data) });
+  try {
+    const grant = await owner('/api/accounts/2348000000002/access', {}); assert.equal(grant.status, 200);
+    const credentials = await grant.json(); assert.ok(credentials.key.length >= 24);
+    assert.ok(!JSON.stringify(store.getGlobal('webSessionUsers')).includes(credentials.key));
+    const login = await fetch(base + '/api/login', { method: 'POST', body: JSON.stringify(credentials) });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie').split(';')[0], { csrf } = await login.json();
+    const user = (route, data, headers = {}) => fetch(base + route, { method: data === undefined ? 'GET' : 'POST', headers: { cookie, 'x-csrf-token': csrf, ...headers }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
+    const state = await (await user('/api/state')).json();
+    assert.equal(state.role, 'account'); assert.deepEqual(state.accounts.map(x => x.id), ['2348000000002']);
+    assert.equal((await user('/api/accounts/primary')).status, 403);
+    assert.equal((await user('/api/accounts/primary/settings', { personality: 'intrusion' })).status, 403);
+    assert.equal((await user('/api/accounts/2348000000002/settings', { personality: 'my style', learnTone: false })).status, 200);
+    assert.equal(store.getBusiness('2348000000002').learnTone, false);
+    assert.equal((await user('/api/accounts/2348000000002/settings', {}, { 'x-csrf-token': '' })).status, 403);
+    assert.equal((await user('/api/providers/groq', { key: 'intrusion' })).status, 403);
+    assert.equal((await user('/api/status')).status, 403);
+    assert.equal((await user('/api/pair', { phone: '2348000000001', primary: true })).status, 403);
+    assert.equal((await user('/api/pair', { phone: '2348000000002', primary: false })).status, 200);
+    assert.equal((await user('/api/accounts/2348000000002/access', {})).status, 403);
+    assert.equal((await user('/api/accounts/2348000000002/remove', { confirm: true })).status, 403);
+    assert.equal((await user('/api/accounts/2348000000002/clear-tone', {})).status, 200);
+    await owner('/api/accounts/2348000000002/access', {});
+    assert.equal((await user('/api/state')).status, 401);
+    const revoked = await owner('/api/accounts/2348000000002/access', { revoke: true }); assert.equal(revoked.status, 200);
+    assert.equal(store.getGlobal('webSessionUsers')['2348000000002'], undefined);
+  } finally { await new Promise(resolve => server.close(resolve)); fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); }
+});
