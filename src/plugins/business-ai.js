@@ -1,6 +1,6 @@
 import { store } from '../store.js';
 import { getAiSettings } from '../ai-provider.js';
-import { businessMemoryCount, clearBusinessMemory } from '../business-assistant.js';
+import { businessMemoryCount, clearBusinessMemory, resumeBusinessChat } from '../business-assistant.js';
 import { jidNumber } from '../utils.js';
 
 const onOff = value => {
@@ -50,6 +50,7 @@ export default [
       const enabled = onOff(ctx.args[0]);
 
       if (enabled) {
+        if (!['manual', 'auto'].includes(store.getBusiness(sessionIdOf(ctx)).handoverMode)) throw new Error('Choose handover first: .handover manual or .handover auto.');
         const ai = getAiSettings({ required: false });
         if (!ai.key) {
           throw new Error('No AI provider is configured yet. Ask the main VOID XMD owner to configure Gemini or Groq.');
@@ -177,7 +178,9 @@ export default [
         '• Casual conversation stays casual.',
         '• Business questions use the saved business information and rules.',
         '• If you manually reply, AI enters human-takeover mode for that customer.',
-        '• When that customer replies again, you have 60 seconds to answer.',
+        '• Choose handover behavior with .handover manual or .handover auto.',
+        '• Manual mode waits for .resumeai. The following 60-second behavior applies only to auto mode.',
+        '• When that customer replies again in auto mode, you have 60 seconds to answer.',
         '• If you do not answer within 60 seconds, AI resumes automatically.',
         '• Every new customer message resets the 60-second window.',
         '• AI handoff and .pauseai are hard pauses, not automatic 60-second resumes.',
@@ -242,7 +245,7 @@ export default [
     async run(ctx) {
       const sid = sessionIdOf(ctx);
       const customer = customerFrom(ctx.args[0]);
-      store.setBusinessChatPaused(sid, customer, false);
+      await resumeBusinessChat(ctx.sock, sid, customer);
       await ctx.reply(`AI resumed for ${customer} on session ${sid}.`);
     }
   },
