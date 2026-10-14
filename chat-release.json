@@ -12,6 +12,7 @@
   "src/dashboard/dashboard.css",
   "src/dashboard/dashboard.js",
   "src/dashboard/index.html",
+  "src/image-messages.js",
   "src/index.js",
   "src/network.js",
   "src/plugin-loader.js",
