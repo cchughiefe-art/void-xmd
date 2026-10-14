@@ -40,3 +40,19 @@ test('oversized audio, provider failures and parallel uploads fail cleanly witho
  store.setGlobal('groqEnabled',false);await assert.rejects(transcribeVoice(audio,{download}),/configured Groq/);
  fs.rmSync(process.env.DATA_DIR,{recursive:true,force:true});
 });
+
+test('image descriptions are bounded, exclude view-once images and release failed downloads',async()=>{
+ const {chatImage,describeChatImage}=await import('../src/image-messages.js');
+ const image={mimetype:'image/jpeg',fileLength:10};
+ assert.equal(chatImage({message:{imageMessage:image}}),image);
+ assert.equal(chatImage({message:{viewOnceMessage:{message:{imageMessage:image}}}}),null);
+ let calls=0;
+ const description=await describeChatImage(image,'What is this?',{download,describe:async(prompt,options)=>{
+  calls++;assert.match(options.image,/^data:image\/jpeg;base64,/);assert.match(prompt,/What is this/);assert.match(options.system,/untrusted/);return 'A phone case';
+ }});
+ assert.equal(description,'A phone case');assert.equal(calls,1);
+ await assert.rejects(describeChatImage({...image,fileLength:4*1024*1024+1},'',{download}),/under 4 MB/);
+ await assert.rejects(describeChatImage(image,'',{download:async()=>Readable.from([Buffer.alloc(4*1024*1024+1)])}),/under 4 MB/);
+ await assert.rejects(describeChatImage(image,'',{download,describe:async()=>{throw new Error('offline');}}),/offline/);
+ assert.equal(await describeChatImage(image,'',{download,describe:async()=> 'Works again'}),'Works again');
+});
