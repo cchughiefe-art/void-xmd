@@ -8,6 +8,9 @@ import { naturalChatStyle } from './chat-style.js';
 
 const histories = new Map();
 const queues = new Map();
+const messageBatches = new Map();
+const BATCH_WAIT_MS = 1800;
+const BATCH_MAX_WAIT_MS = 6000;
 let pendingReplies = 0;
 const aiOutgoing = new Set();
 const humanTakeoverTimers = new Map();
@@ -147,6 +150,54 @@ function transcript(sessionId, chat) {
     .join('\n');
 }
 
+export function shouldSkipClosingReply(message, history) {
+  const last = history.at(-1);
+  return last?.role === 'assistant' && !/[?？]/.test(last.text) &&
+    /^(?:ok(?:ay)?|alright|thanks|thank you|thank u|noted|cool|nice|ehen|no wahala|👍|🙏)[.!\s]*$/iu.test(message.trim());
+}
+
+export function handoffContext(history) {
+  return history.slice(-6).map(item =>
+    `${item.role === 'assistant' ? 'Assistant' : 'Customer'}: ${String(item.text).replace(/\s+/g, ' ').slice(0, 300)}`
+  ).join('\n');
+}
+
+function cancelBatch(sid, chat) {
+  const key = historyKey(sid, chat), batch = messageBatches.get(key);
+  if (batch) clearTimeout(batch.timer);
+  messageBatches.delete(key);
+}
+
+function batchReply(event) {
+  const key = historyKey(event.sid, event.chat);
+  let batch = messageBatches.get(key);
+  if (!batch) {
+    if (messageBatches.size >= MAX_HISTORY_CHATS) return false;
+    batch = { firstAt: Date.now(), messages: [], event };
+    messageBatches.set(key, batch);
+  }
+  clearTimeout(batch.timer);
+  batch.messages.push(event.message.slice(0, 5000));
+  batch.event = event;
+  const delay = batch.messages.length >= 8 ? 0 : Math.min(BATCH_WAIT_MS, Math.max(0, BATCH_MAX_WAIT_MS - (Date.now() - batch.firstAt)));
+  batch.timer = setTimeout(() => {
+    messageBatches.delete(key);
+    void enqueue(key, async () => {
+      const current = store.getBusiness(event.sid);
+      if (!current.enabled || store.getBusinessChatPause(event.sid, event.customer) ||
+          store.getSessionSetting(event.sid, 'mode', config.mode) === 'private') return;
+      const message = batch.messages.join('\n').slice(0, 12000);
+      if (shouldSkipClosingReply(message, getHistory(event.sid, event.chat))) {
+        addHistory(event.sid, event.chat, 'user', message);
+        return;
+      }
+      await respondWithAi({ ...batch.event, message, settings: current });
+    }).catch(error => console.error(`[hybrid-ai-batch:${event.sid}] ${error.message}`));
+  }, delay);
+  batch.timer.unref?.();
+  return true;
+}
+
 async function enqueue(key, task) {
   if (config.chatOnly && pendingReplies >= 16) throw new Error('AI is busy. Please try again shortly.');
   pendingReplies++;
@@ -238,6 +289,9 @@ async function sendHandoffNotice(sock, sid, customer, chat, raw, message) {
     `${customerLine}\n` +
     `${chatLine}\n` +
     `Last message: ${message.slice(0, 1000)}\n\n` +
+    `Handover reason: A human was requested or owner approval/information is needed.\n` +
+    `Recent context (excerpts, not verified facts):\n${handoffContext(getHistory(sid, chat))}\n\n` +
+    `Next step: Read the request, confirm any missing facts or approval, and reply in the customer chat.\n\n` +
     `AI has HARD-PAUSED this customer because human attention is required.\n` +
     `Open the customer chat and reply manually.\n\n` +
     (store.getBusiness(sid).handoverMode === 'auto'
@@ -338,6 +392,9 @@ function scheduleHumanResume({ sock, raw, chat, message, sid, customer }) {
 
 export function clearBusinessMemory(sessionId, customer = '') {
   const sid = sidOf(sessionId);
+  for (const [key, batch] of messageBatches) {
+    if (key.startsWith(`${sid}::`) && (!customer || key === historyKey(sid, customer))) { clearTimeout(batch.timer); messageBatches.delete(key); }
+  }
   if (customer) {
     clearHumanTimer(sid, customer);
     histories.delete(historyKey(sid, customer));
@@ -377,6 +434,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
   // Real human reply = soft takeover. Explicit .pauseai stays hard-paused.
   if (raw?.key?.fromMe) {
     if (isAiOutgoing(raw)) return false;
+    cancelBatch(sid, chat);
     collectTone(sid, [raw], () => message);
 
     if (message && !message.startsWith(config.prefix)) {
@@ -443,13 +501,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
     return false;
   }
 
-  await enqueue(historyKey(sid, chat), async () => {
-    await respondWithAi({
-      sock, raw, chat, message, sid, customer, settings, addUser: true
-    });
-  });
-
-  return true;
+  return batchReply({ sock, raw, chat, message, sid, customer, settings, addUser: true });
 }
 
 export async function sendHandoverSetup(sock, sid) {
