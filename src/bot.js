@@ -17,6 +17,7 @@ import { jidNumber, sleep } from './utils.js';
 const automation = config.chatOnly ? {} : await import('./automation.js');
 const { applyConnectionAutomation, handleCalls, handleDeletedMessages,
   handleMessageAutomation, handleStatusAutomation, rememberMessage } = automation;
+import { collectTone } from './tone-learning.js';
 import { handleBusinessMessage } from './business-assistant.js';
 
 const originalConsoleInfo = console.info.bind(console);
@@ -408,6 +409,10 @@ function attachCommonEvents(record, sock) {
 
   }
 
+  sock.ev.on('messaging-history.set', ({ messages = [] }) => {
+    collectTone(sessionId, messages, bodyOf);
+  });
+
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     for (const raw of messages) {
       try {
@@ -420,7 +425,7 @@ function attachCommonEvents(record, sock) {
           continue;
         }
 
-        if (type !== 'notify') continue;
+        if (type !== 'notify') { collectTone(sessionId, [raw], bodyOf); continue; }
 
         if (!config.chatOnly) rememberMessage(raw);
         const body = bodyOf(raw).trim();

@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { store } from './store.js';
 import { askAi, getAiSettings } from './ai-provider.js';
 import { jidNumber } from './utils.js';
+import { collectTone } from './tone-learning.js';
 import { naturalChatStyle } from './chat-style.js';
 
 const histories = new Map();
@@ -376,6 +377,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
   // Real human reply = soft takeover. Explicit .pauseai stays hard-paused.
   if (raw?.key?.fromMe) {
     if (isAiOutgoing(raw)) return false;
+    collectTone(sid, [raw], () => message);
 
     if (message && !message.startsWith(config.prefix)) {
       const customer = customerKey(raw, chat, sender);
