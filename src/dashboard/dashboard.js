@@ -36,7 +36,7 @@ async function loadAccount() {
   const data = await api(`/api/accounts/${encodeURIComponent(id)}`);
   if (request !== loadingAccount) return;
   accountId = id;
-  for (const field of ['name', 'tone', 'personality', 'info', 'rules', 'location', 'hours']) $('account-form').elements[field].value = data.settings[field] || '';
+  for (const field of ['name', 'tone', 'personality', 'styleExamples', 'info', 'rules', 'location', 'hours']) $('account-form').elements[field].value = data.settings[field] || '';
   $('ai-enabled').checked = Boolean(data.settings.enabled); $('account-mode').value = data.mode;
   $('account-memory').textContent = `${data.memoryChats} conversations in memory · ${Object.keys(data.settings.pausedChats || {}).length} paused`;
   $('remove-account').hidden = id === 'primary';
