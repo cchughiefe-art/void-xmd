@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { store } from './store.js';
 import { executePlugin, pluginDetails } from './plugin-loader.js';
 import { askAi, aiProviderStatus, providerCatalog } from './ai-provider.js';
+import { naturalChatStyle } from './chat-style.js';
 
 export async function execute(ctx) {
   const { command, args, text, reply, isOwner, isSessionOwner, isGroup } = ctx;
@@ -39,7 +40,7 @@ export async function execute(ctx) {
   if (command === 'listapikeys') { admin(); return reply(store.listApiKeys().join('\n') || 'No saved keys.'); }
   if (['ai', 'gpt', 'explain', 'rewrite', 'summarize'].includes(command)) {
     accountOwner(); if (!text) throw new Error('Add a message after the command.');
-    return reply(await askAi(command === 'ai' || command === 'gpt' ? text : `${command}: ${text}`));
+    return reply(await askAi(command === 'ai' || command === 'gpt' ? text : `${command}: ${text}`, { system: naturalChatStyle(store.getBusiness(ctx.sessionId || 'primary')) }));
   }
   if (await executePlugin({ ...ctx, config })) return;
   if (isOwner || isSessionOwner) return reply('Chat-only mode: use .help for available commands.');

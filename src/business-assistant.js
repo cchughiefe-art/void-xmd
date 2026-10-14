@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { store } from './store.js';
 import { askAi, getAiSettings } from './ai-provider.js';
 import { jidNumber } from './utils.js';
+import { naturalChatStyle } from './chat-style.js';
 
 const histories = new Map();
 const queues = new Map();
@@ -111,17 +112,8 @@ function assistantPrompt(settings) {
   return [
     `You are a natural WhatsApp assistant for ${settings.name || 'this account'}.`,
     '',
-    'CONVERSATION STYLE',
-    `- Personality: ${settings.personality || 'friendly, natural, concise and human'}.`,
-    `- Business tone: ${settings.tone || 'friendly, professional and concise'}.`,
-    '- Chat normally when the person is chatting normally.',
-    '- You may answer general questions, explain things, joke lightly, help with ideas and have ordinary conversation.',
-    '- Match the user’s language and level of formality naturally.',
-    '- If the user speaks English, reply naturally in English.',
-    '- If the user speaks Nigerian Pidgin/broken English, reply naturally in Nigerian Pidgin.',
-    '- If the user mixes English and Pidgin, mix them naturally too.',
-    '- Avoid sounding robotic, overly formal, repetitive or like a customer-service script when the conversation is casual.',
-    '- Keep WhatsApp replies reasonably short unless the user clearly asks for detail.',
+    naturalChatStyle(settings),
+    `Business tone when relevant: ${settings.tone || 'clear, relaxed, and concise'}.`,
     '',
     'BUSINESS BEHAVIOUR',
     '- When the conversation becomes about products, prices, stock, orders, delivery, payments, opening hours, policies or the business, switch naturally into business-assistant mode.',
@@ -264,7 +256,7 @@ async function respondWithAi({ sock, raw, chat, message, sid, customer, settings
     'Conversation so far:',
     transcript(sid, chat),
     '',
-    'Respond to the latest user message naturally.',
+    'Reply only to the latest message, using the earlier messages as context. Do not recap the transcript.',
     'Decide from context whether this is normal conversation or business conversation.',
     'Do not mention that you are switching modes.'
   ].join('\n');
@@ -280,7 +272,7 @@ async function respondWithAi({ sock, raw, chat, message, sid, customer, settings
     });
   } catch (error) {
     console.error(`[hybrid-ai:${sid}:${customer}]`, error.message);
-    answer = 'I’m having trouble replying properly right now. A human can get back to you shortly.';
+    answer = 'I can’t reply properly right now. Please try again in a bit.';
   } finally {
     await sock.sendPresenceUpdate('paused', chat).catch(() => {});
   }

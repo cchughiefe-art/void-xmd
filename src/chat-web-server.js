@@ -88,7 +88,7 @@ export function createChatServer({ devices = { list: listDevices, add: addDevice
         const data = await readJson(req);
         if (action === 'settings') {
           const patch = {};
-          for (const field of ['personality', 'name', 'info', 'rules', 'hours', 'location', 'tone']) {
+          for (const field of ['personality', 'styleExamples', 'name', 'info', 'rules', 'hours', 'location', 'tone']) {
             if (data[field] !== undefined) { if (typeof data[field] !== 'string' || data[field].length > 10000) fail(`Invalid ${field}.`); patch[field] = data[field].trim(); }
           }
           if (data.enabled !== undefined) { if (typeof data.enabled !== 'boolean') fail('Invalid AI setting.'); patch.enabled = data.enabled; }
