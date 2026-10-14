@@ -22,6 +22,12 @@ export async function execute(ctx) {
     store.updateBusiness(sid, { [field]: normalized === 'auto' ? 'auto' : command === 'voicelanguage' ? normalized : value });
     return reply(`${command === 'language' ? 'Reply language' : 'Voice language hint'} saved for this account: ${store.getBusiness(sid)[field]}. Voice understanding depends on the transcription model; replies remain text.`);
   }
+  if (command === 'images') {
+    accountOwner(); const sid = ctx.sessionId || 'primary', value = String(args[0] || 'status').toLowerCase();
+    if (!['on', 'off', 'status'].includes(value)) throw new Error('Usage: .images on|off|status');
+    if (value !== 'status') store.updateBusiness(sid, { images: value === 'on' });
+    return reply(`Image understanding: ${store.getBusiness(sid).images === false ? 'OFF' : 'ON'}. Send photos or screenshots, optionally with a question as the caption. Requires Gemini or Groq vision. Images are sent to the AI provider, not saved by the bot. Limit: 4 MB. View-once images and documents are not processed. A receipt image does not verify payment.`);
+  }
   if (command === 'voice') {
     accountOwner(); const sid = ctx.sessionId || 'primary', value = String(args[0] || 'status').toLowerCase();
     if (!['on', 'off', 'status'].includes(value)) throw new Error('Usage: .voice on|off|status');
@@ -41,6 +47,8 @@ export async function execute(ctx) {
       'Manage your linked account directly in WhatsApp. No website login is needed for these commands.',
       '', '*Normal chatting*',
       'Other people send normal private messages to your linked number. No dot, keyword or command is needed. Groups and your own outgoing messages do not trigger AI replies.',
+      '', '*Photos and screenshots*',
+      'Send a normal photo or screenshot, with an optional question in its caption. Image understanding is ON by default and needs Gemini or Groq vision. Images are shared with that provider; the bot does not save image files. Limit: 4 MB. Small text may be misread; receipt images cannot verify payment. View-once images and document attachments are not processed.',
       '', '*Languages*',
       'Text and voice transcripts use automatic language matching by default. Voice notes are transcribed in their original language, not translated to English. Recognition varies by language and recording; Nigerian languages and mixed-language speech need live testing.',
       '', '*Smarter replies*',
@@ -94,7 +102,7 @@ export async function execute(ctx) {
     lines.push('', '*Complete command list*',
       '.start | .menu | .help | .commands | .menufull | .fullmenu', '.ping | .health');
     if (isOwner || isSessionOwner) lines.push(
-      '.setup', '.settings', '.language auto|LANGUAGE|status', '.voicelanguage auto|CODE|status', '.voice on|off|status', '.handover manual|auto|status', '.stats', '.mode public|private', '.public', '.private',
+      '.setup', '.settings', '.images on|off|status', '.language auto|LANGUAGE|status', '.voicelanguage auto|CODE|status', '.voice on|off|status', '.handover manual|auto|status', '.stats', '.mode public|private', '.public', '.private',
       '.set FIELD VALUE', '.clearsetting FIELD', '.paused', '.clearmemory CONFIRM',
       '.providers | .aistatus', '.ai TEXT | .gpt TEXT', '.explain TEXT', '.rewrite TEXT', '.summarize TEXT',
       ...pluginDetails().filter(p => !p.ownerOnly || isOwner).map(p => `.${p.name}${p.aliases.length ? ' (aliases: ' + p.aliases.map(a => '.' + a).join(', ') + ')' : ''} - ${p.description}`)
@@ -110,11 +118,12 @@ export async function execute(ctx) {
       if (!['manual', 'auto'].includes(settings.handoverMode)) throw new Error('Choose your handover preference first: .handover manual or .handover auto. Then send .setup.');
       if (!aiProviderStatus().some(x => x.configured)) throw new Error('No AI provider is ready. Ask the server owner to configure one.');
       store.setSessionSetting(sid, 'mode', 'public'); store.updateBusiness(sid, { enabled: true });
-      return reply('Ready: this account is Public and automatic AI replies are ON.\n\nMessages sent close together are combined after about 2 seconds, with a 6-second maximum wait. Simple closing acknowledgments may not get another reply. Human handover pins the chat and sends your Message yourself chat recent context and the next step.\n\nMultilingual text and voice language matching are automatic. Use .language auto or .language French for reply preferences, and .voicelanguage auto for speech detection. Voice replies remain text.\n\nVoice notes are ON by default unless you switched them off; transcription needs Groq. Each account keeps its own personality and learned tone.\n\nTest from another WhatsApp number. Use .settings to customize, .start for the full guide, or .businessai off to stop.');
+      return reply('Ready: this account is Public and automatic AI replies are ON.\n\nMessages sent close together are combined after about 2 seconds, with a 6-second maximum wait. Simple closing acknowledgments may not get another reply. Human handover pins the chat and sends your Message yourself chat recent context and the next step.\n\nPhotos and screenshots are understood automatically unless disabled with .images off. Requires Gemini or Groq vision; images are sent to the provider. Limit: 4 MB.\n\nMultilingual text and voice language matching are automatic. Use .language auto or .language French for reply preferences, and .voicelanguage auto for speech detection. Voice replies remain text.\n\nVoice notes are ON by default unless you switched them off; transcription needs Groq. Each account keeps its own personality and learned tone.\n\nTest from another WhatsApp number. Use .settings to customize, .start for the full guide, or .businessai off to stop.');
     }
     if (command === 'settings') return reply([
       '*This WhatsApp account*', `AI replies: ${settings.enabled ? 'ON' : 'OFF'}`,
       `Mode: ${store.getSessionSetting(sid, 'mode', config.mode)}`,
+      `Images: ${settings.images === false ? 'OFF' : 'ON'} (.images)`,
       `Reply language: ${settings.replyLanguage || 'auto'} (.language)`,
       `Voice language: ${settings.voiceLanguage || 'auto'} (.voicelanguage)`,
       `Tone learning: ${settings.learnTone === false ? 'OFF' : 'ON'} (${(settings.learnedTone || []).length} samples)`,
