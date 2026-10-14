@@ -21,5 +21,17 @@ test('chat mode loads only assistant plugins and rejects non-owner account contr
   let message;
   await execute({ ...context, isOwner: true, command: 'play', reply: async text => { message = text; } });
   assert.match(message, /Chat-only/);
+  let guide;
+  await execute({ ...context, command: 'start', reply: async text => { guide = text; } });
+  assert.match(guide, /No dot, keyword or command/); assert.match(guide, /Create a customer account/); assert.match(guide, /HTTPS/);
+  assert.ok(!guide.includes('Server owner controls'));
+  await execute({ ...context, isSessionOwner: true, command: 'start', reply: async text => { guide = text; } });
+  assert.match(guide, /\.businessai on/); assert.match(guide, /\.learntone/); assert.ok(!guide.includes('Server owner controls'));
+  await execute({ ...context, isOwner: true, command: 'start', reply: async text => { guide = text; } });
+  assert.match(guide, /Server owner controls/);
+  await assert.rejects(execute({ ...context, command: 'mode', args: ['public'] }), /owner/);
+  let modeReply;
+  await execute({ ...context, isSessionOwner: true, command: 'mode', args: ['public'], reply: async text => { modeReply = text; } });
+  assert.match(modeReply, /now public/);
   fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 });
