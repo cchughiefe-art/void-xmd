@@ -9,6 +9,13 @@ export async function execute(ctx) {
   const { command, args, text, reply, isOwner, isSessionOwner, isGroup } = ctx;
   const admin = () => { if (!isOwner) throw new Error('Main owner only.'); };
   const accountOwner = () => { if (!isOwner && !isSessionOwner) throw new Error('Linked account owner only.'); };
+  if (command === 'handover') {
+    accountOwner(); const sid = ctx.sessionId || 'primary', value = String(args[0] || '').toLowerCase();
+    if (!value || value === 'status') return reply(`Handover: ${store.getBusiness(sid).handoverMode || 'not chosen (manual until selected)'}\nChoose .handover manual or .handover auto. Manual: AI waits for .resumeai NUMBER. Auto: after your reply, a new customer message waits 60 seconds before AI resumes. Explicit .pauseai always needs .resumeai.`);
+    if (!['manual', 'auto'].includes(value)) throw new Error('Usage: .handover manual|auto|status');
+    store.updateBusiness(sid, { handoverMode: value });
+    return reply(`Handover saved for this account: ${value}. ${value === 'manual' ? 'AI stays paused until .resumeai NUMBER.' : 'After you reply, AI can resume 60 seconds after a new customer message if you do not answer.'} Existing hard pauses still need .resumeai.`);
+  }
   if (command === 'start') {
     const lines = [
       '*VOID XMD V2 | WhatsApp control guide*',
@@ -26,6 +33,7 @@ export async function execute(ctx) {
     ];
     if (isOwner || isSessionOwner) lines.push(
       '', '*1. Start and check*',
+      '.handover manual or .handover auto - choose your handover preference first',
       '.setup — set Public mode and enable AI replies for this account',
       '.settings — view this account’s settings and command list',
       '.businessai on|off — enable or stop automatic replies',
@@ -58,6 +66,15 @@ export async function execute(ctx) {
       '.cloudflareaccount ID — set the Cloudflare account ID',
       'Environment keys are managed in the server .env. Restart the server to check GitHub updates. Keep provider keys private.'
     );
+    lines.push('', '*Complete command list*',
+      '.start | .menu | .help | .commands | .menufull | .fullmenu', '.ping | .health');
+    if (isOwner || isSessionOwner) lines.push(
+      '.setup', '.settings', '.handover manual|auto|status', '.stats', '.mode public|private', '.public', '.private',
+      '.set FIELD VALUE', '.clearsetting FIELD', '.paused', '.clearmemory CONFIRM',
+      '.providers | .aistatus', '.ai TEXT | .gpt TEXT', '.explain TEXT', '.rewrite TEXT', '.summarize TEXT',
+      ...pluginDetails().filter(p => !p.ownerOnly || isOwner).map(p => `.${p.name}${p.aliases.length ? ' (aliases: ' + p.aliases.map(a => '.' + a).join(', ') + ')' : ''} - ${p.description}`)
+    );
+    if (isOwner) lines.push('.devices', '.adddevice NUMBER', '.removedevice NUMBER CONFIRM', '.provider NAME on|off', '.setaimodel PROVIDER MODEL', '.addapikey PROVIDER KEY', '.removeapikey PROVIDER', '.listapikeys', '.cloudflareaccount ID');
     return reply(lines.join('\n'));
   }
   if (['setup', 'settings', 'paused', 'set', 'clearsetting', 'clearmemory'].includes(command)) {
@@ -65,6 +82,7 @@ export async function execute(ctx) {
     const sid = ctx.sessionId || 'primary', settings = store.getBusiness(sid);
     const fields = { personality: 'personality', tone: 'tone', examples: 'styleExamples', name: 'name', knowledge: 'info', rules: 'rules', location: 'location', hours: 'hours' };
     if (command === 'setup') {
+      if (!['manual', 'auto'].includes(settings.handoverMode)) throw new Error('Choose your handover preference first: .handover manual or .handover auto. Then send .setup.');
       if (!aiProviderStatus().some(x => x.configured)) throw new Error('No AI provider is ready. Ask the server owner to configure one.');
       store.setSessionSetting(sid, 'mode', 'public'); store.updateBusiness(sid, { enabled: true });
       return reply('Ready: this account is Public and automatic AI replies are ON. Test from another WhatsApp number. Use .settings to customize or .businessai off to stop.');
@@ -73,7 +91,7 @@ export async function execute(ctx) {
       '*This WhatsApp account*', `AI replies: ${settings.enabled ? 'ON' : 'OFF'}`,
       `Mode: ${store.getSessionSetting(sid, 'mode', config.mode)}`,
       `Tone learning: ${settings.learnTone === false ? 'OFF' : 'ON'} (${(settings.learnedTone || []).length} samples)`,
-      `Memory: ${businessMemoryCount(sid)} chats`, `Paused: ${Object.keys(settings.pausedChats || {}).length}`,
+      `Handover: ${settings.handoverMode || 'not chosen (manual)'} (change with .handover manual|auto)`, `Memory: ${businessMemoryCount(sid)} chats`, `Paused: ${Object.keys(settings.pausedChats || {}).length}`,
       ...Object.entries(fields).map(([label, field]) => `${label}: ${String(settings[field] || 'not set').slice(0, 500)}`),
       '', 'Change: .set FIELD VALUE', 'Fields: ' + Object.keys(fields).join(', '),
       '.clearsetting FIELD', '.setup', '.businessai on|off', '.learntone on|off|clear',

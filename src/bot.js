@@ -18,7 +18,7 @@ const automation = config.chatOnly ? {} : await import('./automation.js');
 const { applyConnectionAutomation, handleCalls, handleDeletedMessages,
   handleMessageAutomation, handleStatusAutomation, rememberMessage } = automation;
 import { collectTone } from './tone-learning.js';
-import { handleBusinessMessage } from './business-assistant.js';
+import { handleBusinessMessage, sendHandoverSetup } from './business-assistant.js';
 
 const originalConsoleInfo = console.info.bind(console);
 console.info = (...args) => {
@@ -570,6 +570,7 @@ async function connectSession(record) {
       try { record.stopConnectionAutomation?.(); } catch {}
       record.stopConnectionAutomation = config.chatOnly ? () => {} : applyConnectionAutomation(sock, record.id);
       logger.info({ jid: sock.user?.id, session: record.id }, `${config.name} connected`);
+      if (config.chatOnly) await sendHandoverSetup(sock, record.id);
     }
 
     if (update.connection === 'close') {

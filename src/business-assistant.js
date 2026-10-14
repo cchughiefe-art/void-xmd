@@ -242,10 +242,12 @@ async function sendHandoffNotice(sock, sid, customer, chat, raw, message) {
     `Last message: ${message.slice(0, 1000)}\n\n` +
     `AI has HARD-PAUSED this customer because human attention is required.\n` +
     `Open the customer chat and reply manually.\n\n` +
-    `After your manual reply, normal human-takeover mode begins. When the customer messages again, you have 60 seconds to respond. If you do not respond within 60 seconds, AI resumes automatically.\n\n` +
+    (store.getBusiness(sid).handoverMode === 'auto'
+      ? 'After your reply, each new customer message gives you 60 seconds to answer before AI resumes.\n\n'
+      : 'Your handover mode is manual. AI stays paused after your reply until you send .resumeai.\n\n') +
     `Force AI back immediately: .resumeai ${resumeTarget}`;
 
-  const sent = await sock.sendMessage(ownerJid, { text }).catch(() => null);
+  const sent = await sock.sendMessage(ownerJid, { text }).catch(error => { console.error(`[hybrid-ai:${sid}] Handover notification failed: ${error.message}`); return null; });
   markAiOutgoing(sent);
 }
 
@@ -311,7 +313,7 @@ function scheduleHumanResume({ sock, raw, chat, message, sid, customer }) {
 
     try {
       const pause = store.getBusinessChatPause(sid, customer);
-      if (!pause || pause.reason !== 'human') return;
+      if (!pause || pause.reason !== 'human' || store.getBusiness(sid).handoverMode !== 'auto') return;
 
       const settings = store.getBusiness(sid);
       if (!settings.enabled) return;
@@ -395,7 +397,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
           sid,
           customer,
           true,
-          keepHard ? 'manual-command' : 'human'
+          keepHard ? 'manual-command' : settings.handoverMode === 'auto' ? 'human' : 'human-manual'
         );
         addHistory(sid, chat, 'assistant', message);
       }
@@ -409,7 +411,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
   const pause = store.getBusinessChatPause(sid, customer);
 
   if (pause) {
-    if (pause.reason === 'human') {
+    if (pause.reason === 'human' && settings.handoverMode === 'auto') {
       addHistory(sid, chat, 'user', message);
       scheduleHumanResume({ sock, raw, chat, message, sid, customer });
       return true;
@@ -434,4 +436,20 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
   });
 
   return true;
+}
+
+export async function sendHandoverSetup(sock, sid) {
+  const settings = store.getBusiness(sid);
+  if (settings.handoverMode || settings.handoverPrompted) return;
+  const target = sessionOwnerJid(sock); if (!target) return;
+  try {
+    const sent = await sock.sendMessage(target, { text: 'Welcome to VOID XMD V2. Choose how this account hands chats back to AI.\n\n.handover manual\nAI waits until you send .resumeai NUMBER.\n\n.handover auto\nAfter you reply manually, AI may resume if the next customer message waits 60 seconds.\n\nExplicit .pauseai always stays paused. You can change your choice later with .handover. Then use .setup to enable replies and .start for all commands.' });
+    markAiOutgoing(sent); store.updateBusiness(sid, { handoverPrompted: true });
+  } catch (error) { console.error(`[hybrid-ai:${sid}] Setup notice failed: ${error.message}`); }
+}
+export async function resumeBusinessChat(sock, sid, customer) {
+  clearHumanTimer(sid, customer);
+  const pause = store.getBusinessChatPause(sid, customer);
+  if (pause?.handoffMessageKey) await unpinHandoffMessage(sock, pause);
+  store.setBusinessChatPaused(sid, customer, false);
 }
