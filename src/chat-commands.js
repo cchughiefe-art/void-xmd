@@ -28,6 +28,8 @@ export async function execute(ctx) {
       'Manage your linked account directly in WhatsApp. No website login is needed for these commands.',
       '', '*Normal chatting*',
       'Other people send normal private messages to your linked number. No dot, keyword or command is needed. Groups and your own outgoing messages do not trigger AI replies.',
+      '', '*Smarter replies*',
+      'Messages sent close together are combined after about 2 seconds (up to 6 seconds for a continuing burst). Simple closing acknowledgments may be left without another reply, but questions are answered. Handover notices include recent chat excerpts and the next step for the owner. Each account keeps its own personality and learned tone.',
       '', '*Linking a new account*',
       'Ask the server owner to generate a pairing code for your number. On your WhatsApp go to Linked devices → Link a device → Link with phone number, then enter that code. Linking once lets you manage that session from Message yourself.',
       '', '*Who can change settings?*',
@@ -92,7 +94,7 @@ export async function execute(ctx) {
       if (!['manual', 'auto'].includes(settings.handoverMode)) throw new Error('Choose your handover preference first: .handover manual or .handover auto. Then send .setup.');
       if (!aiProviderStatus().some(x => x.configured)) throw new Error('No AI provider is ready. Ask the server owner to configure one.');
       store.setSessionSetting(sid, 'mode', 'public'); store.updateBusiness(sid, { enabled: true });
-      return reply('Ready: this account is Public and automatic AI replies are ON. Test from another WhatsApp number. Use .settings to customize or .businessai off to stop.');
+      return reply('Ready: this account is Public and automatic AI replies are ON.\n\nMessages sent close together are combined after about 2 seconds, with a 6-second maximum wait. Simple closing acknowledgments may not get another reply. Human handover pins the chat and sends your Message yourself chat recent context and the next step.\n\nVoice notes are ON by default unless you switched them off; transcription needs Groq. Each account keeps its own personality and learned tone.\n\nTest from another WhatsApp number. Use .settings to customize, .start for the full guide, or .businessai off to stop.');
     }
     if (command === 'settings') return reply([
       '*This WhatsApp account*', `AI replies: ${settings.enabled ? 'ON' : 'OFF'}`,
