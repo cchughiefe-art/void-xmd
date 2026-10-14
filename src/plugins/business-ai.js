@@ -203,6 +203,7 @@ export default [
   },
 
   setText('setaipersonality','personality','.setaipersonality Friendly, natural and human.','Set the normal-chat personality for this WhatsApp account'),
+  setText('setaiexamples','styleExamples','.setaiexamples Paste a few example chats here','Teach the phrasing and rhythm of this account using example replies'),
   setText('setbusinessname','name','.setbusinessname Bright Accessories','Set the business name for this WhatsApp account'),
   setText('setbusinessinfo','info','.setbusinessinfo Describe products, prices, delivery, ordering and payment rules here','Set the business knowledge for this WhatsApp account'),
   setText('setbusinessrules','rules','.setbusinessrules Add the business instructions the assistant must follow','Set business rules for this WhatsApp account'),
