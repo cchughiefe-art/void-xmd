@@ -468,7 +468,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
     if ((paused && !(paused.reason === 'human' && settings.handoverMode === 'auto')) || store.getSessionSetting(sid, 'mode', config.mode) === 'private') return false;
     try {
       if (settings.voiceNotes === false) throw new Error('Voice-note replies are switched off for this account. Please send text.');
-      message = await transcribeVoice(audio);
+      message = await transcribeVoice(audio, { language: settings.voiceLanguage || 'auto' });
       // A transcription is chat content only; it never enters the WhatsApp command parser.
       message = `[Voice-note transcript. Words may be imperfect; vocal tone is unavailable.] ${message}`;
     } catch (error) {
