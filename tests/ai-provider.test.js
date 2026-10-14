@@ -37,6 +37,11 @@ test('provider discovery, fallback, cooldown, free model guard and isolation', a
     await askAi('Again');
     assert.equal(requests.length, 1);
     assert.ok(requests[0].url.includes('groq'));
+    requests.length = 0;
+    await askAi('Read this picture', { image: 'data:image/jpeg;base64,dGVzdA==' });
+    assert.equal(requests.length, 2);
+    assert.equal(requests.at(-1).body.model, 'qwen/qwen3.8-27b');
+    assert.equal(requests.at(-1).body.messages.at(-1).content[1].type, 'image_url');
     process.env.AI_PROVIDER_ORDER = 'openrouter';
     globalThis.fetch = async () => Response.json({ choices: [{ message: { content: 'cut off' }, finish_reason: 'length' }] });
     await assert.rejects(askAi('Hi'), /temporarily unavailable/);
