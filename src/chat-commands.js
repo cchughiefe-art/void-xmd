@@ -9,6 +9,12 @@ export async function execute(ctx) {
   const { command, args, text, reply, isOwner, isSessionOwner, isGroup } = ctx;
   const admin = () => { if (!isOwner) throw new Error('Main owner only.'); };
   const accountOwner = () => { if (!isOwner && !isSessionOwner) throw new Error('Linked account owner only.'); };
+  if (command === 'voice') {
+    accountOwner(); const sid = ctx.sessionId || 'primary', value = String(args[0] || 'status').toLowerCase();
+    if (!['on', 'off', 'status'].includes(value)) throw new Error('Usage: .voice on|off|status');
+    if (value !== 'status') store.updateBusiness(sid, { voiceNotes: value === 'on' });
+    return reply(`Voice-note replies: ${store.getBusiness(sid).voiceNotes === false ? 'OFF' : 'ON'}. Requires Groq. Audio is sent to Groq for transcription, then answered as text. Up to 3 minutes / 6 MB. Use .voice off to disable.`);
+  }
   if (command === 'handover') {
     accountOwner(); const sid = ctx.sessionId || 'primary', value = String(args[0] || '').toLowerCase();
     if (!value || value === 'status') return reply(`Handover: ${store.getBusiness(sid).handoverMode || 'not chosen (manual until selected)'}\nChoose .handover manual or .handover auto. Manual: AI waits for .resumeai NUMBER. Auto: after your reply, a new customer message waits 60 seconds before AI resumes. Explicit .pauseai always needs .resumeai.`);
@@ -50,6 +56,7 @@ export async function execute(ctx) {
       '', '*3. Learn your tone*',
       '.learntone on|off|clear',
       'Uses limited outgoing samples WhatsApp makes available, not the entire chat archive. Samples are shared with the configured AI provider when replying. Learning is optional.',
+      '', '*Voice notes*', '.voice on|off|status - voice transcription using Groq; replies arrive as text', 'Audio is sent to Groq. Limit: 3 minutes / 6 MB. Accuracy can vary for noise, accents and Pidgin. Sarcasm is interpreted from words and context, not a reliable reading of vocal tone.',
       '', '*4. Contacts and memory*',
       '.paused — list paused contacts for this account',
       '.pauseai NUMBER — pause one contact', '.resumeai NUMBER — resume one contact',
@@ -69,7 +76,7 @@ export async function execute(ctx) {
     lines.push('', '*Complete command list*',
       '.start | .menu | .help | .commands | .menufull | .fullmenu', '.ping | .health');
     if (isOwner || isSessionOwner) lines.push(
-      '.setup', '.settings', '.handover manual|auto|status', '.stats', '.mode public|private', '.public', '.private',
+      '.setup', '.settings', '.voice on|off|status', '.handover manual|auto|status', '.stats', '.mode public|private', '.public', '.private',
       '.set FIELD VALUE', '.clearsetting FIELD', '.paused', '.clearmemory CONFIRM',
       '.providers | .aistatus', '.ai TEXT | .gpt TEXT', '.explain TEXT', '.rewrite TEXT', '.summarize TEXT',
       ...pluginDetails().filter(p => !p.ownerOnly || isOwner).map(p => `.${p.name}${p.aliases.length ? ' (aliases: ' + p.aliases.map(a => '.' + a).join(', ') + ')' : ''} - ${p.description}`)

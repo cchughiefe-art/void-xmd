@@ -1,3 +1,4 @@
+import { voiceAudio, transcribeVoice } from './voice-notes.js';
 import { config } from './config.js';
 import { store } from './store.js';
 import { askAi, getAiSettings } from './ai-provider.js';
@@ -369,7 +370,7 @@ export function businessMemoryCount(sessionId) {
 export async function handleBusinessMessage({ sock, raw, chat, sender, body, isGroup, sessionId = 'primary' }) {
   const sid = sidOf(sessionId);
   const chatId = String(chat || '');
-  const message = String(body || '').trim();
+  let message = String(body || '').trim();
 
   if (isGroup || ignoredChat(chatId)) return false;
 
@@ -405,7 +406,23 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
     return false;
   }
 
-  if (!message || message.startsWith(config.prefix) || isOwnerChat(raw, sender)) return false;
+  if (message.startsWith(config.prefix) || isOwnerChat(raw, sender)) return false;
+  const audio = voiceAudio(raw);
+  if (audio && !message) {
+    const paused = store.getBusinessChatPause(sid, customerKey(raw, chat, sender));
+    if ((paused && !(paused.reason === 'human' && settings.handoverMode === 'auto')) || store.getSessionSetting(sid, 'mode', config.mode) === 'private') return false;
+    try {
+      if (settings.voiceNotes === false) throw new Error('Voice-note replies are switched off for this account. Please send text.');
+      message = await transcribeVoice(audio);
+      // A transcription is chat content only; it never enters the WhatsApp command parser.
+      message = `[Voice-note transcript. Words may be imperfect; vocal tone is unavailable.] ${message}`;
+    } catch (error) {
+      console.error(`[voice:${sid}] Transcription failed`);
+      const safe = /^(Voice|Please|Another|That|The voice|This audio|I could)/.test(error.message) ? error.message : 'I could not read that voice note. Please send text.';
+      const sent = await sock.sendMessage(chat, { text: safe }, { quoted: raw }); markAiOutgoing(sent); return true;
+    }
+  }
+  if (!message) return false;
 
   const customer = customerKey(raw, chat, sender);
   const pause = store.getBusinessChatPause(sid, customer);
