@@ -23,7 +23,7 @@ test('chat mode loads only assistant plugins and rejects non-owner account contr
   assert.match(message, /Chat-only/);
   let guide;
   await execute({ ...context, command: 'start', reply: async text => { guide = text; } });
-  assert.match(guide, /No dot, keyword or command/); assert.match(guide, /Create a customer account/); assert.match(guide, /HTTPS/);
+  assert.match(guide, /No dot, keyword or command/); assert.match(guide, /Message yourself/); assert.match(guide, /website login is needed/);
   assert.ok(!guide.includes('Server owner controls'));
   await execute({ ...context, isSessionOwner: true, command: 'start', reply: async text => { guide = text; } });
   assert.match(guide, /\.businessai on/); assert.match(guide, /\.learntone/); assert.ok(!guide.includes('Server owner controls'));
@@ -33,5 +33,17 @@ test('chat mode loads only assistant plugins and rejects non-owner account contr
   let modeReply;
   await execute({ ...context, isSessionOwner: true, command: 'mode', args: ['public'], reply: async text => { modeReply = text; } });
   assert.match(modeReply, /now public/);
+  await assert.rejects(execute({ ...context, command: 'settings' }), /owner/);
+  await assert.rejects(execute({ ...context, command: 'provider', args: ['groq', 'off'] }), /Main owner/);
+  await execute({ ...context, isSessionOwner: true, sessionId: 'alpha', command: 'set', args: ['personality'], text: 'personality Alpha voice' });
+  await execute({ ...context, isSessionOwner: true, sessionId: 'beta', command: 'settings', reply: async text => { message = text; } });
+  assert.ok(!message.includes('Alpha voice'));
+  await execute({ ...context, isSessionOwner: true, sessionId: 'alpha', command: 'settings', reply: async text => { message = text; } });
+  assert.match(message, /Alpha voice/);
+  await assert.rejects(execute({ ...context, isSessionOwner: true, command: 'set', args: ['enabled'], text: 'enabled true' }), /Choose a field/);
+  await assert.rejects(execute({ ...context, isSessionOwner: true, command: 'clearmemory', args: [] }), /CONFIRM/);
+  await execute({ ...context, isSessionOwner: true, sessionId: 'alpha', command: 'clearsetting', args: ['personality'] });
+  await execute({ ...context, isSessionOwner: true, sessionId: 'alpha', command: 'settings', reply: async text => { message = text; } });
+  assert.ok(!message.includes('Alpha voice'));
   fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 });
