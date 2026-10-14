@@ -4,11 +4,24 @@ import { executePlugin, pluginDetails } from './plugin-loader.js';
 import { askAi, aiProviderStatus, providerCatalog } from './ai-provider.js';
 import { clearBusinessMemory, businessMemoryCount } from './business-assistant.js';
 import { naturalChatStyle } from './chat-style.js';
+import { voiceLanguageCodes } from './voice-notes.js';
 
 export async function execute(ctx) {
   const { command, args, text, reply, isOwner, isSessionOwner, isGroup } = ctx;
   const admin = () => { if (!isOwner) throw new Error('Main owner only.'); };
   const accountOwner = () => { if (!isOwner && !isSessionOwner) throw new Error('Linked account owner only.'); };
+  if (command === 'language' || command === 'voicelanguage') {
+    accountOwner();
+    const sid = ctx.sessionId || 'primary';
+    const value = String(text || args.join(' ') || 'status').trim();
+    const field = command === 'language' ? 'replyLanguage' : 'voiceLanguage';
+    if (value.toLowerCase() === 'status') return reply(`${command === 'language' ? 'Reply language' : 'Voice transcription language'}: ${store.getBusiness(sid)[field] || 'auto'}. Use .${command} auto to match/detect the sender’s language.`);
+    const normalized = value.toLowerCase();
+    if (command === 'voicelanguage' && normalized !== 'auto' && !voiceLanguageCodes.includes(normalized)) throw new Error('Use .voicelanguage auto or a supported hint: ' + voiceLanguageCodes.join(', '));
+    if (command === 'language' && (!/^[\p{L}\p{M} -]{2,40}$/u.test(value))) throw new Error('Use .language auto or a language name, such as French, Arabic or Nigerian Pidgin.');
+    store.updateBusiness(sid, { [field]: normalized === 'auto' ? 'auto' : command === 'voicelanguage' ? normalized : value });
+    return reply(`${command === 'language' ? 'Reply language' : 'Voice language hint'} saved for this account: ${store.getBusiness(sid)[field]}. Voice understanding depends on the transcription model; replies remain text.`);
+  }
   if (command === 'voice') {
     accountOwner(); const sid = ctx.sessionId || 'primary', value = String(args[0] || 'status').toLowerCase();
     if (!['on', 'off', 'status'].includes(value)) throw new Error('Usage: .voice on|off|status');
@@ -28,6 +41,8 @@ export async function execute(ctx) {
       'Manage your linked account directly in WhatsApp. No website login is needed for these commands.',
       '', '*Normal chatting*',
       'Other people send normal private messages to your linked number. No dot, keyword or command is needed. Groups and your own outgoing messages do not trigger AI replies.',
+      '', '*Languages*',
+      'Text and voice transcripts use automatic language matching by default. Voice notes are transcribed in their original language, not translated to English. Recognition varies by language and recording; Nigerian languages and mixed-language speech need live testing.',
       '', '*Smarter replies*',
       'Messages sent close together are combined after about 2 seconds (up to 6 seconds for a continuing burst). Simple closing acknowledgments may be left without another reply, but questions are answered. Handover notices include recent chat excerpts and the next step for the owner. Each account keeps its own personality and learned tone.',
       '', '*Linking a new account*',
@@ -58,6 +73,7 @@ export async function execute(ctx) {
       '', '*3. Learn your tone*',
       '.learntone on|off|clear',
       'Uses limited outgoing samples WhatsApp makes available, not the entire chat archive. Samples are shared with the configured AI provider when replying. Learning is optional.',
+      '', '*Language controls*', '.language auto — match each customer’s language (default)', '.language French — set a default reply language; customers can request another', '.language status', '.voicelanguage auto — detect the spoken language (default)', '.voicelanguage fr — hint when this account’s incoming recordings are French', '.voicelanguage status', 'Reply language and voice transcription hints are independent. Leave voice on auto for customers using different languages.',
       '', '*Voice notes*', '.voice on|off|status - voice transcription using Groq; replies arrive as text', 'Audio is sent to Groq. Limit: 3 minutes / 6 MB. Accuracy can vary for noise, accents and Pidgin. Sarcasm is interpreted from words and context, not a reliable reading of vocal tone.',
       '', '*4. Contacts and memory*',
       '.paused — list paused contacts for this account',
@@ -78,7 +94,7 @@ export async function execute(ctx) {
     lines.push('', '*Complete command list*',
       '.start | .menu | .help | .commands | .menufull | .fullmenu', '.ping | .health');
     if (isOwner || isSessionOwner) lines.push(
-      '.setup', '.settings', '.voice on|off|status', '.handover manual|auto|status', '.stats', '.mode public|private', '.public', '.private',
+      '.setup', '.settings', '.language auto|LANGUAGE|status', '.voicelanguage auto|CODE|status', '.voice on|off|status', '.handover manual|auto|status', '.stats', '.mode public|private', '.public', '.private',
       '.set FIELD VALUE', '.clearsetting FIELD', '.paused', '.clearmemory CONFIRM',
       '.providers | .aistatus', '.ai TEXT | .gpt TEXT', '.explain TEXT', '.rewrite TEXT', '.summarize TEXT',
       ...pluginDetails().filter(p => !p.ownerOnly || isOwner).map(p => `.${p.name}${p.aliases.length ? ' (aliases: ' + p.aliases.map(a => '.' + a).join(', ') + ')' : ''} - ${p.description}`)
@@ -94,11 +110,13 @@ export async function execute(ctx) {
       if (!['manual', 'auto'].includes(settings.handoverMode)) throw new Error('Choose your handover preference first: .handover manual or .handover auto. Then send .setup.');
       if (!aiProviderStatus().some(x => x.configured)) throw new Error('No AI provider is ready. Ask the server owner to configure one.');
       store.setSessionSetting(sid, 'mode', 'public'); store.updateBusiness(sid, { enabled: true });
-      return reply('Ready: this account is Public and automatic AI replies are ON.\n\nMessages sent close together are combined after about 2 seconds, with a 6-second maximum wait. Simple closing acknowledgments may not get another reply. Human handover pins the chat and sends your Message yourself chat recent context and the next step.\n\nVoice notes are ON by default unless you switched them off; transcription needs Groq. Each account keeps its own personality and learned tone.\n\nTest from another WhatsApp number. Use .settings to customize, .start for the full guide, or .businessai off to stop.');
+      return reply('Ready: this account is Public and automatic AI replies are ON.\n\nMessages sent close together are combined after about 2 seconds, with a 6-second maximum wait. Simple closing acknowledgments may not get another reply. Human handover pins the chat and sends your Message yourself chat recent context and the next step.\n\nMultilingual text and voice language matching are automatic. Use .language auto or .language French for reply preferences, and .voicelanguage auto for speech detection. Voice replies remain text.\n\nVoice notes are ON by default unless you switched them off; transcription needs Groq. Each account keeps its own personality and learned tone.\n\nTest from another WhatsApp number. Use .settings to customize, .start for the full guide, or .businessai off to stop.');
     }
     if (command === 'settings') return reply([
       '*This WhatsApp account*', `AI replies: ${settings.enabled ? 'ON' : 'OFF'}`,
       `Mode: ${store.getSessionSetting(sid, 'mode', config.mode)}`,
+      `Reply language: ${settings.replyLanguage || 'auto'} (.language)`,
+      `Voice language: ${settings.voiceLanguage || 'auto'} (.voicelanguage)`,
       `Tone learning: ${settings.learnTone === false ? 'OFF' : 'ON'} (${(settings.learnedTone || []).length} samples)`,
       `Handover: ${settings.handoverMode || 'not chosen (manual)'} (change with .handover manual|auto)`, `Memory: ${businessMemoryCount(sid)} chats`, `Paused: ${Object.keys(settings.pausedChats || {}).length}`,
       ...Object.entries(fields).map(([label, field]) => `${label}: ${String(settings[field] || 'not set').slice(0, 500)}`),
