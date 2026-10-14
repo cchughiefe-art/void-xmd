@@ -14,6 +14,10 @@ test('handover preference is selected per session, prompted once, and editable b
  const ctx={args:[],text:'',reply:async()=>{},isOwner:false,isSessionOwner:true,sessionId:'alpha'};
  await assert.rejects(execute({...ctx,command:'setup'}),/Choose your handover/);
  await assert.rejects(execute({...ctx,isSessionOwner:false,command:'handover',args:['auto']}),/owner/);
+ await assert.rejects(execute({...ctx,isSessionOwner:false,command:'language',text:'French'}),/owner/);
+ await execute({...ctx,command:'language',text:'French'});assert.equal(store.getBusiness('alpha').replyLanguage,'French');assert.equal(store.getBusiness('beta').replyLanguage,undefined);
+ await execute({...ctx,command:'voicelanguage',text:'fr'});assert.equal(store.getBusiness('alpha').voiceLanguage,'fr');
+ await assert.rejects(execute({...ctx,command:'voicelanguage',text:'invalid'}),/supported hint/);
  await execute({...ctx,command:'handover',args:['manual']});assert.equal(store.getBusiness('alpha').handoverMode,'manual');assert.equal(store.getBusiness('beta').handoverMode,undefined);
  await execute({...ctx,command:'handover',args:['auto']});assert.equal(store.getBusiness('alpha').handoverMode,'auto');
 });
