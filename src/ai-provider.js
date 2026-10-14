@@ -88,21 +88,22 @@ async function acquire() {
   await new Promise(resolve => waiters.push(resolve));
 }
 function release() { const next = waiters.shift(); if (next) next(); else active--; }
-export async function askAi(prompt, { system = '', temperature = 0.7, maxTokens = 1200, timeout = 45000 } = {}) {
-  const providers = getAiProviders();
-  if (!providers.length) getAiSettings();
+export async function askAi(prompt, { system = '', temperature = 0.7, maxTokens = 1200, timeout = 45000, image = null } = {}) {
+  const providers = getAiProviders().filter(p => !image || ['gemini', 'groq'].includes(p.name)).map(p => image && p.name === 'groq' ? { ...p, model: process.env.GROQ_VISION_MODEL || 'qwen/qwen3.8-27b' } : p);
+  if (!providers.length) { if (image) throw new Error('Image understanding needs a configured Gemini or Groq provider.'); getAiSettings(); }
   await acquire();
   try {
-    const messages = [...(system ? [{ role: 'system', content: system }] : []), { role: 'user', content: String(prompt) }];
+    const messages = [...(system ? [{ role: 'system', content: system }] : []), { role: 'user', content: image ? [{ type: 'text', text: String(prompt) }, { type: 'image_url', image_url: { url: image } }] : String(prompt) }];
     const deadline = Date.now() + Math.min(60000, Math.max(1000, timeout));
     for (const provider of providers) {
-      if ((cooldowns.get(provider.name) || 0) > Date.now()) continue;
+      const cooldownKey = image ? `${provider.name}:vision` : provider.name;
+      if ((cooldowns.get(cooldownKey) || 0) > Date.now()) continue;
       const remaining = deadline - Date.now();
       if (remaining < 100) break;
       try {
         return await callProvider(provider, messages, { temperature, maxTokens, timeout: Math.min(12000, remaining) });
       } catch (error) {
-        cooldowns.set(provider.name, Date.now() + (error.cooldown || 15000));
+        cooldowns.set(cooldownKey, Date.now() + (error.cooldown || 15000));
         // Never log response bodies, credentials, or user prompts.
         console.warn(`AI provider unavailable: ${provider.name}`);
       }
