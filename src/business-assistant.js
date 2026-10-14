@@ -16,7 +16,6 @@ const MAX_HISTORY_MESSAGES = config.chatOnly ? 10 : 16;
 const MAX_HISTORY_CHATS = config.chatOnly ? 80 : 250;
 const AI_OUTGOING_TTL_MS = 60000;
 const HUMAN_TAKEOVER_GRACE_MS = 60000;
-const HANDOFF_PIN_SECONDS = 2592000;
 
 const sidOf = value => String(value || 'primary');
 const customerOf = value => jidNumber(value) || String(value || '');
@@ -186,27 +185,25 @@ function sessionOwnerJid(sock) {
   return fallback ? `${fallback}@s.whatsapp.net` : '';
 }
 
-export async function pinHandoffMessage(sock, chat, raw) {
-  const key = raw?.key;
-  if (!chat || !key?.id) return null;
+export async function pinHandoffChat(sock, chat) {
+  if (!chat) return false;
   try {
-    await sock.sendMessage(chat, { pin: { ...key, remoteJid: key.remoteJid || chat }, type: 1, time: HANDOFF_PIN_SECONDS });
-    return { chat: String(chat), key: { ...key, remoteJid: key.remoteJid || chat } };
+    await sock.chatModify({ pin: true }, chat);
+    return true;
   } catch (error) {
-    console.error(`[hybrid-ai-pin] ${error.message}`);
-    return null;
+    console.error(`[hybrid-ai-chat-pin] ${error.message}`);
+    return false;
   }
 }
 
-async function unpinHandoffMessage(sock, pause, fallbackChat = '') {
-  const key = pause?.handoffMessageKey;
-  const chat = String(pause?.handoffChat || fallbackChat || key?.remoteJid || '');
-  if (!chat || !key?.id) return false;
+async function unpinHandoffChat(sock, pause, fallbackChat = '') {
+  const chat = String(pause?.handoffChat || fallbackChat || '');
+  if (!pause?.handoffChatPinned || !chat) return false;
   try {
-    await sock.sendMessage(chat, { pin: { ...key, remoteJid: key.remoteJid || chat }, type: 2 });
+    await sock.chatModify({ pin: false }, chat);
     return true;
   } catch (error) {
-    console.error(`[hybrid-ai-unpin] ${error.message}`);
+    console.error(`[hybrid-ai-chat-unpin] ${error.message}`);
     return false;
   }
 }
@@ -294,10 +291,10 @@ async function respondWithAi({ sock, raw, chat, message, sid, customer, settings
 
   if (handoff) {
     clearHumanTimer(sid, customer);
-    const pinned = await pinHandoffMessage(sock, chat, raw);
+    const pinned = await pinHandoffChat(sock, chat);
     store.setBusinessChatPaused(sid, customer, true, 'handoff', {
-      handoffChat: pinned?.chat || String(chat || ''),
-      handoffMessageKey: pinned?.key || raw?.key || null
+      handoffChat: String(chat || ''),
+      handoffChatPinned: pinned
     });
     await sendHandoffNotice(sock, sid, customer, chat, raw, message);
   }
@@ -389,7 +386,7 @@ export async function handleBusinessMessage({ sock, raw, chat, sender, body, isG
         const current = store.getBusinessChatPause(sid, customer);
 
         if (current?.reason === 'handoff') {
-          await unpinHandoffMessage(sock, current, chat);
+          await unpinHandoffChat(sock, current, chat);
         }
 
         const keepHard = current?.reason === 'manual-command';
@@ -467,6 +464,6 @@ export async function sendHandoverSetup(sock, sid) {
 export async function resumeBusinessChat(sock, sid, customer) {
   clearHumanTimer(sid, customer);
   const pause = store.getBusinessChatPause(sid, customer);
-  if (pause?.handoffMessageKey) await unpinHandoffMessage(sock, pause);
+  if (pause?.handoffChatPinned) await unpinHandoffChat(sock, pause);
   store.setBusinessChatPaused(sid, customer, false);
 }
