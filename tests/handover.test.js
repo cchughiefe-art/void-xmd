@@ -46,3 +46,32 @@ test('handover pins the chat through app-state and never sends a pinned message'
  assert.equal(chatModificationToAppPatch(calls.at(-1).mod,chat).syncAction.pinAction.pinned,false);
  assert.equal(await pinHandoffChat({chatModify:async()=>{throw new Error('pin limit');}},chat),false);
 });
+
+test('closing acknowledgments respect pending questions and handoff excerpts stay bounded', async () => {
+ const {shouldSkipClosingReply,handoffContext}=await import('../src/business-assistant.js');
+ assert.equal(shouldSkipClosingReply('Thanks!', [{role:'assistant',text:'That is all set.'}]),true);
+ assert.equal(shouldSkipClosingReply('Okay', [{role:'assistant',text:'Which model do you want?'}]),false);
+ assert.equal(shouldSkipClosingReply('Thanks, what is the price?', [{role:'assistant',text:'You are welcome.'}]),false);
+ assert.equal(shouldSkipClosingReply('Hey', []),false);
+ const excerpt=handoffContext(Array.from({length:10},(_,i)=>({role:'user',text:`request-${i} `+'x'.repeat(800)})));
+ assert.ok(!excerpt.includes('request-0'));assert.ok(excerpt.includes('request-9'));assert.ok(excerpt.length<2000);
+});
+
+test('burst messages get one reply and a human takeover cancels waiting replies', async () => {
+ process.env.GROQ_API_KEY='test-groq';process.env.AI_PROVIDER_ORDER='groq';
+ const originalFetch=globalThis.fetch, sent=[], requests=[];
+ globalThis.fetch=async(url,options)=>{requests.push(JSON.parse(options.body));return Response.json({choices:[{message:{content:'Hello, what do you need?'},finish_reason:'stop'}]});};
+ const sock={sendPresenceUpdate:async()=>{},sendMessage:async(jid,body)=>{sent.push({jid,body});return {key:{id:'batch-out-'+sent.length}};}};
+ const chat='2348000000099@s.whatsapp.net';
+ const event=(body,sid='burst',fromMe=false)=>({sock,chat,sender:chat,body,isGroup:false,sessionId:sid,raw:{key:{id:body,remoteJid:chat,fromMe}}});
+ try {
+  store.updateBusiness('burst',{enabled:true});store.setSessionSetting('burst','mode','public');
+  await handleBusinessMessage(event('Hey'));await handleBusinessMessage(event('I need something'));
+  await new Promise(resolve=>setTimeout(resolve,2100));
+  assert.equal(sent.length,1);assert.equal(requests.length,1);
+  assert.match(requests[0].messages.at(-1).content,/Hey\nI need something/);
+  store.updateBusiness('cancelled',{enabled:true});store.setSessionSetting('cancelled','mode','public');
+  await handleBusinessMessage(event('Hello','cancelled'));await handleBusinessMessage(event('I will handle this','cancelled',true));
+  await new Promise(resolve=>setTimeout(resolve,2100));assert.equal(sent.length,1);
+ } finally {globalThis.fetch=originalFetch;}
+});
