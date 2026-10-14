@@ -24,5 +24,6 @@
   "tests/chat-mode.test.js",
   "tests/chat-style.test.js",
   "tests/dashboard.test.js",
+  "tests/handover.test.js",
   "tests/startup-update.test.js"
 ]
