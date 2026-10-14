@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 let state = null, csrf = '', accountId = '', providerName = '', noticeTimer, loadingAccount = 0;
 const titles = { overview: ['Your AI, under control.', 'Connected accounts, server usage, and AI availability.'], accounts: ['Make every account your own.', 'Personality, knowledge, automatic replies, and human control.'], providers: ['More options. Fewer interruptions.', 'Configure keys and models for your AI fallback chain.'] };
 function notify(message, error = false) { clearTimeout(noticeTimer); $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false; noticeTimer = setTimeout(() => { $('toast').hidden = true; }, 6000); }
-function showLogin() { $('access-result').textContent = ''; $('access-result').hidden = true; state = null; csrf = ''; $('app').hidden = true; $('login').hidden = false; }
+function showLogin() { $('access-result').textContent = ''; $('access-result').hidden = true; state = null; csrf = ''; $('app').hidden = true; $('login').hidden = false; $('login-form').hidden = false; $('signup-form').hidden = true; }
 async function api(path, data) {
   const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', ...(csrf ? { 'x-csrf-token': csrf } : {}) }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
   const result = await response.json();
@@ -104,5 +104,14 @@ $('revoke-access').addEventListener('click', task(async () => {
  if (!accountId || !confirm('Revoke website access for this session user?')) return;
  await api(`/api/accounts/${accountId}/access`, { revoke: true }); $('access-result').textContent = ''; $('access-result').hidden = true; notify('Session login revoked.');
 }));
+$('show-signup').addEventListener('click', () => { $('login-form').hidden = true; $('signup-form').hidden = false; $('show-signup').hidden = true; });
+$('cancel-signup').addEventListener('click', () => { $('login-form').hidden = false; $('signup-form').hidden = true; $('show-signup').hidden = false; });
+$('signup-form').addEventListener('submit', task(async () => {
+ if ($('signup-password').value !== $('signup-confirm').value) throw new Error('Passwords do not match.');
+ const result = await api('/api/signup', { phone: $('signup-phone').value, password: $('signup-password').value });
+ $('signup-password').value = ''; $('signup-confirm').value = ''; $('login-account').value = result.accountId;
+ $('cancel-signup').click(); notify(result.message);
+}));
+api('/api/public').then(data => { $('show-signup').hidden = !data.signupEnabled; $('signup-note').textContent = data.requiresHttps ? 'Customer signup will be available after HTTPS is configured.' : ''; }).catch(() => {});
 refresh().catch(() => showLogin());
 setInterval(() => { if (state && document.visibilityState === 'visible') refresh().catch(error => { if (state) notify(error.message, true); }); }, 20000);
