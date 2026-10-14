@@ -105,3 +105,27 @@ test('session user login limits every account route and revokes existing session
     assert.equal(store.getGlobal('webSessionUsers')['2348000000002'], undefined);
   } finally { await new Promise(resolve => server.close(resolve)); fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); }
 });
+
+test('customer signup requires HTTPS, reserves only new numbers, isolates login and limits capacity', async () => {
+ loadStore(); store.setGlobal('webSessionUsers', {});
+ accounts = [{ id:'primary', primary:true, phone:'2348000000001', connected:true }];
+ const previous = process.env.WEB_TRUST_PROXY; process.env.WEB_TRUST_PROXY='true';
+ const server=createChatServer({devices,adminKey:secret,allowSignup:true}); await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ const base=`http://127.0.0.1:${server.address().port}`;
+ const signup=(phone,secure=true)=>fetch(base+'/api/signup',{method:'POST',headers:secure?{'x-forwarded-proto':'https'}:{},body:JSON.stringify({phone,password:'customer-password-123'})});
+ try {
+  assert.equal((await signup('2348000000003',false)).status,403);
+  assert.equal((await signup('2348000000001')).status,409);
+  assert.equal((await signup('2348000000003')).status,201);
+  assert.equal((await signup('2348000000003')).status,409);
+  assert.equal(store.getBusiness('2348000000003').enabled,false);
+  assert.equal(store.getBusiness('2348000000003').learnTone,false);
+  const login=await fetch(base+'/api/login',{method:'POST',body:JSON.stringify({accountId:'2348000000003',key:'customer-password-123'})});
+  assert.equal(login.status,200); const cookie=login.headers.get('set-cookie').split(';')[0], {csrf}=await login.json();
+  const state=await (await fetch(base+'/api/state',{headers:{cookie}})).json(); assert.equal(state.accounts.length,1); assert.equal(state.accounts[0].status,'not-linked');
+  const enable=await fetch(base+'/api/accounts/2348000000003/settings',{method:'POST',headers:{cookie,'x-csrf-token':csrf},body:JSON.stringify({enabled:true})}); assert.equal(enable.status,400);
+  assert.equal((await fetch(base+'/api/accounts/primary',{headers:{cookie}})).status,403);
+  const oldMax=process.env.MAX_WHATSAPP_SESSIONS; process.env.MAX_WHATSAPP_SESSIONS='2';
+  try { assert.equal((await signup('2348000000004')).status,409); } finally { if(oldMax===undefined)delete process.env.MAX_WHATSAPP_SESSIONS;else process.env.MAX_WHATSAPP_SESSIONS=oldMax; }
+ } finally {await new Promise(r=>server.close(r));if(previous===undefined)delete process.env.WEB_TRUST_PROXY;else process.env.WEB_TRUST_PROXY=previous;fs.rmSync(process.env.DATA_DIR,{recursive:true,force:true});}
+});
